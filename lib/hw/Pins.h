@@ -21,6 +21,27 @@ constexpr uint8_t HALL_ADC[4] = {36, 39, 34, 35};
 // Mux select lines S0..S3, shared by all four multiplexers.
 constexpr uint8_t MUX_S[4] = {25, 26, 27, 14};
 
+// Board size the Hall wiring covers (4 muxes x 16 channels = 64 inputs).
+constexpr int HALL_N = 7;
+constexpr int HALL_CELLS = HALL_N * HALL_N;
+
+// Square -> (multiplexer, channel), indexed r*HALL_N+c. PROVISIONAL: row-major
+// fill (mux = index / 16, channel = index % 16); rewrite to match the actual
+// sensor harness once it is wired.
+struct HallChannel {
+  uint8_t mux;
+  uint8_t ch;
+};
+constexpr HallChannel HALL_MAP[HALL_CELLS] = {
+    {0,  0}, {0,  1}, {0,  2}, {0,  3}, {0,  4}, {0,  5}, {0,  6},  // row 0
+    {0,  7}, {0,  8}, {0,  9}, {0, 10}, {0, 11}, {0, 12}, {0, 13},  // row 1
+    {0, 14}, {0, 15}, {1,  0}, {1,  1}, {1,  2}, {1,  3}, {1,  4},  // row 2
+    {1,  5}, {1,  6}, {1,  7}, {1,  8}, {1,  9}, {1, 10}, {1, 11},  // row 3
+    {1, 12}, {1, 13}, {1, 14}, {1, 15}, {2,  0}, {2,  1}, {2,  2},  // row 4
+    {2,  3}, {2,  4}, {2,  5}, {2,  6}, {2,  7}, {2,  8}, {2,  9},  // row 5
+    {2, 10}, {2, 11}, {2, 12}, {2, 13}, {2, 14}, {2, 15}, {3,  0},  // row 6
+};
+
 // Stepper drivers (A4988).
 constexpr uint8_t X_STEP = 19;
 constexpr uint8_t X_DIR = 21;

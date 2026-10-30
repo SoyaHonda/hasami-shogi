@@ -24,6 +24,14 @@ jobs:
           python-version: "3.x"
       - name: Install PlatformIO
         run: pip install platformio
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      # src/golden_cases.h is not in git; the esp32dev build needs it.
+      - name: Generate golden cases header
+        run: node tools/gen-golden.mjs
+      - name: Build esp32dev firmware
+        run: pio run -e esp32dev
       - name: Build rig firmware
         run: pio run -e rig
 
