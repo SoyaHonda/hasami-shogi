@@ -1,0 +1,637 @@
+<title>リアルタイムはさみ将棋</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<style>
+/* Layout: 実験机の上の試作盤。左に乳白アクリルの盤（下からLEDが透ける）、右に計器パネル（スコア・設定・記録）。 */
+:root{
+  --bg:#e9ece8; --panel:#f7f8f5; --ink:#1b231f; --muted:#5a6760; --line:#c8d0ca;
+  --acryl:#f5f7f3; --acryl-edge:#cfd6d0; --grid:#b4beb7;
+  --koma-h:#e4c58a; --koma-h-ink:#2a1c0b; --koma-h-edge:#a8823f;
+  --koma-m:#2c3431; --koma-m-ink:#eef3ef; --koma-m-edge:#0f1412;
+  --amber:#d8332a; --red:#c99700; --cyan:#7a45d1; --blue:#1f6fe0; --ok:#2a8f53;
+  --btn:#1b231f; --btn-ink:#f7f8f5;
+  --font-koma:"Shippori Mincho B1","Hiragino Mincho ProN","Yu Mincho",serif;
+  --font-ui:"IBM Plex Sans JP","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
+  --font-num:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#111513; --panel:#181d1a; --ink:#e3eae5; --muted:#91a097; --line:#2b3430;
+    --acryl:#1f2622; --acryl-edge:#323c37; --grid:#3d4943;
+    --koma-h:#d8b874; --koma-h-ink:#24180a; --koma-h-edge:#8d6c2f;
+    --koma-m:#0a0d0c; --koma-m-ink:#e7eee9; --koma-m-edge:#56635c;
+    --amber:#ff5a46; --red:#ffd23f; --cyan:#b48cff; --blue:#5aa2ff; --ok:#4cc27c;
+    --btn:#e3eae5; --btn-ink:#111513;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#111513; --panel:#181d1a; --ink:#e3eae5; --muted:#91a097; --line:#2b3430;
+  --acryl:#1f2622; --acryl-edge:#323c37; --grid:#3d4943;
+  --koma-h:#d8b874; --koma-h-ink:#24180a; --koma-h-edge:#8d6c2f;
+  --koma-m:#0a0d0c; --koma-m-ink:#e7eee9; --koma-m-edge:#56635c;
+  --amber:#ff5a46; --red:#ffd23f; --cyan:#b48cff; --blue:#5aa2ff; --ok:#4cc27c;
+  --btn:#e3eae5; --btn-ink:#111513;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);font-size:14px;line-height:1.6}
+.wrap{max-width:1140px;margin:0 auto;padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);gap:28px;align-items:start}
+header{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
+h1{margin:0;font-family:var(--font-koma);font-weight:800;font-size:clamp(24px,4vw,34px);letter-spacing:.04em;text-wrap:balance}
+.sub{color:var(--muted);margin:0}
+@media (max-width:840px){.wrap{grid-template-columns:minmax(0,1fr)}}
+
+/* board frame with shogi coordinates */
+.stage{min-width:0}
+.frame{display:grid;grid-template-columns:minmax(0,1fr) 22px;grid-template-rows:22px auto;max-width:640px}
+.files{display:grid;font-family:var(--font-num);font-size:12px;color:var(--muted);text-align:center;align-items:end;padding-bottom:3px}
+.ranks{display:grid;font-family:var(--font-koma);font-size:13px;color:var(--muted);align-items:center;justify-items:center}
+.board{position:relative;aspect-ratio:1/1;width:100%;background:var(--acryl);border:1px solid var(--acryl-edge);border-radius:6px;box-shadow:0 1px 0 var(--acryl-edge),0 14px 30px -18px rgba(0,0,0,.35);touch-action:manipulation;user-select:none;-webkit-user-select:none;overflow:hidden;cursor:pointer}
+.cells{position:absolute;inset:0;display:grid}
+.cell{position:relative;border-right:1px solid var(--grid);border-bottom:1px solid var(--grid)}
+.cell.lr{border-right:0}.cell.lb{border-bottom:0}
+.cell::before{content:"";position:absolute;inset:6%;border-radius:50%;background:radial-gradient(circle,var(--led,var(--amber)) 0,transparent 68%);opacity:var(--glow,0);transition:opacity .12s linear;pointer-events:none}
+.cell .bar{position:absolute;left:12%;bottom:7%;height:3px;border-radius:2px;background:var(--amber);width:calc(var(--glow,0)*76%);pointer-events:none}
+.cell .sec{position:absolute;right:6%;top:4%;font-family:var(--font-num);font-size:calc(var(--cell,60px)*.16);color:var(--muted);pointer-events:none;font-variant-numeric:tabular-nums}
+.cell.legal::after{content:"";position:absolute;left:50%;top:50%;width:22%;height:22%;transform:translate(-50%,-50%);border-radius:50%;background:var(--blue);opacity:.75}
+.cell.threat{--led:var(--red)}
+.cell.threat::before{opacity:.9;animation:pulse .9s ease-in-out infinite alternate}
+.cell.threat::after{border-color:var(--red);opacity:.9}
+.cell.plan{box-shadow:inset 0 0 0 3px var(--cyan)}
+.cell.origin{box-shadow:inset 0 0 0 2px var(--ink);}
+@keyframes pulse{from{opacity:.45}to{opacity:.95}}
+
+.layer{position:absolute;inset:0;pointer-events:none}
+.head{position:absolute;left:0;top:0;display:grid;place-items:center}
+.head::before{content:"";width:54%;height:54%;border-radius:50%;border:2px dashed var(--cyan);opacity:.45}
+.head.busy::before{opacity:.95}
+.koma{position:absolute;left:0;top:0;display:grid;place-items:center;will-change:transform}
+.koma .shape{width:76%;height:86%;display:grid;place-items:center;clip-path:polygon(50% 0%,86% 15%,100% 100%,0% 100%,14% 15%);font-family:var(--font-koma);font-weight:800;font-size:calc(var(--cell,60px)*.42);padding-top:10%;transition:transform .12s,opacity .12s}
+.koma .edge{filter:drop-shadow(0 1.5px 0 var(--e)) drop-shadow(0 4px 5px rgba(0,0,0,.18));display:grid;place-items:center;width:100%;height:100%}
+.koma.h .shape{background:var(--koma-h);color:var(--koma-h-ink)}
+.koma.h{--e:var(--koma-h-edge)}
+.koma.m .shape{background:var(--koma-m);color:var(--koma-m-ink);transform:rotate(180deg)}
+.koma.m{--e:var(--koma-m-edge)}
+.koma.cool .shape{opacity:.62}
+.koma.held .shape{opacity:.22;transform:scale(.86)}
+.koma.held .edge{filter:none}
+.koma.gone{transition:opacity .5s,transform .5s;opacity:0}
+
+.overlay{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(2px);text-align:center;padding:16px}
+.overlay .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px;max-width:340px;display:grid;gap:10px;justify-items:center}
+.overlay .big{font-family:var(--font-koma);font-weight:800;font-size:clamp(28px,6vw,48px);line-height:1.1}
+.overlay p{margin:0;color:var(--muted)}
+
+.status{margin:10px 0 0;min-height:1.6em;font-weight:500;max-width:640px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin-top:8px;color:var(--muted);font-size:12.5px;max-width:640px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+
+/* panel */
+aside{display:grid;gap:18px;min-width:0}
+section.box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:10px}
+.box h2{margin:0;font-size:12px;letter-spacing:.12em;color:var(--muted);font-weight:700}
+.score{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.score .side{display:grid;gap:2px}
+.score .lbl{font-size:12.5px;color:var(--muted)}
+.score .num{font-family:var(--font-num);font-size:28px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+.score .num small{font-size:14px;color:var(--muted);font-weight:400}
+.meta{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:12.5px;color:var(--muted)}
+.meta b{font-family:var(--font-num);color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.btns{display:flex;flex-wrap:wrap;gap:8px}
+button{font:inherit;cursor:pointer}
+.btn{background:var(--btn);color:var(--btn-ink);border:0;border-radius:7px;padding:8px 14px;font-weight:700}
+.btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.btn:focus-visible,.seg button:focus-visible,input:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:center}
+.row label{font-size:13px}
+.row output{font-family:var(--font-num);font-size:13px;font-variant-numeric:tabular-nums}
+.row input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--cyan)}
+.row .hint{grid-column:1/-1;font-size:12px;color:var(--muted);line-height:1.5}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg button{background:transparent;border:0;padding:6px 12px;color:var(--ink)}
+.seg button[aria-pressed="true"]{background:var(--btn);color:var(--btn-ink);font-weight:700}
+.check{display:flex;align-items:center;gap:8px;font-size:13px}
+.check input{accent-color:var(--cyan);width:16px;height:16px}
+.inline{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
+.inline input[type=number]{width:56px;font:inherit;font-family:var(--font-num);padding:3px 6px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
+ol.log{list-style:none;margin:0;padding:0;display:grid;gap:4px;max-height:220px;overflow:auto;font-size:13px}
+ol.log li{display:grid;grid-template-columns:56px minmax(0,1fr);gap:8px}
+ol.log time{font-family:var(--font-num);color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+ol.log .h{color:var(--ink)} ol.log .m{color:var(--ink)}
+ol.log .read{color:var(--cyan);font-weight:500}
+ol.log .cap::before{content:"● ";color:var(--red)}
+.empty{color:var(--muted);font-size:13px}
+.rules{font-size:13px;color:var(--muted);margin:0;padding-left:1.2em;display:grid;gap:2px}
+@media (prefers-reduced-motion: reduce){
+  .cell.threat::before{animation:none}
+  .koma .shape,.koma.gone,.cell::before{transition:none}
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>リアルタイムはさみ将棋</h1>
+    <p class="sub">実機を作る前に、クールダウンと勝利条件を試すためのシミュレータ</p>
+  </header>
+
+  <div class="stage">
+    <div class="frame">
+      <div class="files" id="files"></div><div></div>
+      <div class="board" id="board" role="grid" aria-label="盤">
+        <div class="cells" id="cells"></div>
+        <div class="layer" id="layer"></div>
+        <div class="overlay" id="overlay" hidden></div>
+      </div>
+      <div class="ranks" id="ranks"></div>
+    </div>
+    <p class="status" id="status"></p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--amber)"></i>クールダウン中</span>
+      <span><i class="dot" style="background:var(--red)"></i>機械の読み：置かれるとはさまれるマス</span>
+      <span><i class="dot" style="border:3px solid var(--cyan)"></i>機械の駒の行き先</span>
+      <span><i class="dot" style="border:2px dashed var(--cyan)"></i>盤の下の電磁石ヘッド</span>
+      <span><i class="dot" style="background:var(--blue)"></i>置けるマス</span>
+    </div>
+  </div>
+
+  <aside>
+    <section class="box" aria-label="スコア">
+      <div class="score">
+        <div class="side"><span class="lbl">あなた（歩）が取った数</span><span class="num" id="capH">0<small> / 4</small></span></div>
+        <div class="side"><span class="lbl">機械（と）が取った数</span><span class="num" id="capM">0<small> / 4</small></span></div>
+      </div>
+      <div class="meta">
+        <span>経過 <b id="clock">0:00.0</b></span>
+        <span>先回り成功 <b id="saves">0</b></span>
+        <span>機械の手数 <b id="mmoves">0</b></span>
+      </div>
+      <div class="btns">
+        <button class="btn" id="startBtn">対局開始</button>
+        <button class="btn ghost" id="pauseBtn">一時停止</button>
+      </div>
+    </section>
+
+    <section class="box" aria-label="ルール設定">
+      <h2>ルール</h2>
+      <div class="inline">
+        <span>盤</span>
+        <div class="seg" role="group" aria-label="盤の大きさ">
+          <button id="n7" aria-pressed="true">7×7</button>
+          <button id="n9" aria-pressed="false">9×9</button>
+        </div>
+      </div>
+      <div class="inline">
+        <label for="target">先取</label><input type="number" id="target" min="1" max="9" value="4"><span>枚で勝ち</span>
+      </div>
+      <div class="inline">
+        <label class="check"><input type="checkbox" id="diffOn">差でも勝ち</label>
+        <input type="number" id="diff" min="1" max="6" value="2" aria-label="勝ちになる枚数差"><span>枚差</span>
+      </div>
+      <div class="row">
+        <label for="hCd">あなたのクールダウン（駒ごと）</label><output id="hCdOut">3.0 秒</output>
+        <input type="range" id="hCd" min="0" max="10" step="0.5" value="3">
+      </div>
+      <div class="row">
+        <label for="mCd">機械のクールダウン（駒ごと）</label><output id="mCdOut">1.0 秒</output>
+        <input type="range" id="mCd" min="0" max="6" step="0.5" value="1">
+      </div>
+    </section>
+
+    <section class="box" aria-label="機械の設定">
+      <h2>機械</h2>
+      <div class="inline">
+        <span>強さ</span>
+        <div class="seg" role="group" aria-label="機械の強さ">
+          <button id="lvEasy" aria-pressed="false">やさしい</button>
+          <button id="lvNormal" aria-pressed="true">ふつう</button>
+          <button id="lvHard" aria-pressed="false">つよい</button>
+        </div>
+      </div>
+      <p class="hint" style="margin:0;font-size:12px;color:var(--muted)">やさしいは持ち上げた駒だけを読み、つよいは動かせる駒すべての狙いを常に見張ります。</p>
+      <div class="row">
+        <label for="aggr">攻め気</label><output id="aggrOut">50 %</output>
+        <input type="range" id="aggr" min="0" max="1" step="0.05" value="0.5">
+        <span class="hint">高いほど、多少危なくても前に出て、はさむ形を作りにいきます。</span>
+      </div>
+      <div class="row">
+        <label for="free">空送り速度（駒の下へ向かう）</label><output id="freeOut"></output>
+        <input type="range" id="free" min="1" max="10" step="0.5" value="4">
+      </div>
+      <div class="row">
+        <label for="speed">駒を引く速度</label><output id="speedOut"></output>
+        <input type="range" id="speed" min="0.5" max="6" step="0.25" value="1.5">
+        <span class="hint">1マス3cmとして換算しています。電磁石のヘッドは盤の下に一つだけで、動かす駒の真下まで移動し、0.2秒かけて吸着してから引っぱります。実機で測った値に合わせて調整してください。</span>
+      </div>
+      <div class="row">
+        <label for="react">反応時間</label><output id="reactOut">250 ms</output>
+        <input type="range" id="react" min="50" max="1000" step="50" value="250">
+        <span class="hint">センサの読み取りから動き出すまでの遅れです。</span>
+      </div>
+      <label class="check"><input type="checkbox" id="read" checked>持ち上げた瞬間に読む（オフにすると、置かれるまで気づかない）</label>
+    </section>
+
+    <section class="box" aria-label="記録">
+      <h2>記録</h2>
+      <ol class="log" id="log"><li class="empty">対局が始まると、取った駒と機械の先回りがここに残ります。</li></ol>
+    </section>
+
+    <section class="box" aria-label="ルールの要点">
+      <h2>遊び方</h2>
+      <ul class="rules">
+        <li>自分の歩をクリックして持ち上げ、行き先をクリックして置きます。元のマスをクリックすると取り消し（Escキーでも可）。</li>
+        <li>駒は縦横にまっすぐ何マスでも進めます。駒は飛び越えられません。</li>
+        <li>相手の駒を縦か横に自分の駒ではさむと取れます。自分から敵の間に入った駒は取られません。隅の囲み取りはなしです。</li>
+        <li>動かした駒はクールダウンが終わるまで動かせません。持ち上げている間の駒は盤上にないので、はさまれません。</li>
+        <li>駒が取られると試合が止まり、機械が盤外へ運び出してから再開します。</li>
+        <li>機械の駒が動いている途中で行く手に駒を置くと、その手前で止まります。</li>
+      </ul>
+    </section>
+  </aside>
+</div>
+
+<script>
+(()=>{
+const DIRS=[[1,0],[-1,0],[0,1],[0,-1]];
+const KAN=['一','二','三','四','五','六','七','八','九'];
+const S={N:7,target:4,diffOn:false,diff:2,hCd:3,mCd:1,speed:1.5,free:4,react:250,read:true,level:'normal',aggr:.5};
+const $=id=>document.getElementById(id);
+const boardEl=$('board'),cellsEl=$('cells'),layerEl=$('layer'),overlayEl=$('overlay');
+let G,cellEls=[],komaEls=new Map(),logDirty=true,headEl=null;
+
+function sq(r,c){return `${G.N-c}${KAN[r]}`}
+function newGame(){
+  G={N:S.N,t:0,pieces:[],nid:1,phase:'ready',capH:0,capM:0,held:null,lift:null,thinkAt:0,plan:null,log:[],saves:0,mmoves:0,winner:null,cdEnd:0,removeLeft:0,job:null,head:{r:0,c:Math.floor(S.N/2)}};
+  for(let c=0;c<S.N;c++){addP('M',0,c);addP('H',S.N-1,c)}
+  build();logDirty=true;showOverlay('ready');
+}
+function addP(side,r,c){G.pieces.push({id:G.nid++,side,r,c,cd:0,cdLen:1,move:null,alive:true})}
+function byId(id){return G.pieces.find(p=>p.id===id)}
+
+/* ---------- board model ---------- */
+function board(withReserve){
+  const N=G.N,b=new Int8Array(N*N);
+  for(const p of G.pieces){
+    if(!p.alive||p.id===G.held)continue;
+    b[p.r*N+p.c]=p.side==='H'?1:2;
+    if(withReserve&&p.move&&p.move.next){const[nr,nc]=p.move.next;b[nr*N+nc]=2}
+  }
+  return b;
+}
+function dests(b,N,r,c){
+  const out=[];
+  for(const[dr,dc]of DIRS){let rr=r+dr,cc=c+dc;while(rr>=0&&rr<N&&cc>=0&&cc<N&&b[rr*N+cc]===0){out.push(rr*N+cc);rr+=dr;cc+=dc}}
+  return out;
+}
+function capturesAt(b,N,side,r,c){
+  const out=[],enemy=side===1?2:1;
+  for(const[dr,dc]of DIRS){
+    const run=[];let rr=r+dr,cc=c+dc;
+    while(rr>=0&&rr<N&&cc>=0&&cc<N){
+      const v=b[rr*N+cc];
+      if(v===enemy){run.push(rr*N+cc)}
+      else{if(v===side&&run.length)out.push(...run);break}
+      rr+=dr;cc+=dc;
+    }
+  }
+  return out;
+}
+
+/* ---------- arrival & capture ---------- */
+function arrive(p){
+  const N=G.N,b=board(false),side=p.side==='H'?1:2;
+  const caps=capturesAt(b,N,side,p.r,p.c);
+  if(caps.length){
+    const set=new Set(caps);
+    for(const q of G.pieces){if(q.alive&&q.id!==G.held&&set.has(q.r*N+q.c)&&q.side!==p.side){q.alive=false;q.move=null}}
+    if(p.side==='H'){G.capH+=caps.length;addLog(`あなたが${sq(p.r,p.c)}に置いて${caps.length}枚取り`,'h cap')}
+    else{G.capM+=caps.length;addLog(`機械が${sq(p.r,p.c)}に動いて${caps.length}枚取り`,'m cap')}
+    const w=winner();
+    if(w){G.winner=w;G.phase='over';showOverlay('over');}
+    else{G.phase='removing';G.removeLeft=900+700*caps.length;showOverlay('removing',caps.length)}
+  }
+  return caps.length;
+}
+function winner(){
+  if(G.capH>=S.target||(S.diffOn&&G.capH-G.capM>=S.diff))return 'H';
+  if(G.capM>=S.target||(S.diffOn&&G.capM-G.capH>=S.diff))return 'M';
+  return null;
+}
+
+/* ---------- human input ---------- */
+function cellFromEvent(e){
+  const r=boardEl.getBoundingClientRect(),N=G.N;
+  const c=Math.floor((e.clientX-r.left)/r.width*N),rr=Math.floor((e.clientY-r.top)/r.height*N);
+  if(c<0||c>=N||rr<0||rr>=N)return null;return[rr,c];
+}
+boardEl.addEventListener('pointerdown',e=>{
+  if(G.phase!=='play')return;
+  const cell=cellFromEvent(e);if(!cell)return;
+  const[r,c]=cell,N=G.N,idx=r*N+c;
+  if(G.held){
+    const p=byId(G.held);
+    if(r===p.r&&c===p.c){cancelHold();return}
+    const legal=dests(board(true),N,p.r,p.c);
+    if(legal.includes(idx)){place(p,r,c);return}
+    const q=G.pieces.find(q=>q.alive&&q.side==='H'&&q.r===r&&q.c===c&&q.id!==G.held);
+    if(q&&G.t>=q.cd){cancelHold();lift(q)}
+    return;
+  }
+  const q=G.pieces.find(q=>q.alive&&q.side==='H'&&q.r===r&&q.c===c);
+  if(q&&G.t>=q.cd)lift(q);
+});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&G.held)cancelHold()});
+function lift(p){
+  G.held=p.id;
+  const b=board(false);let best=0;
+  for(const d of dests(b,G.N,p.r,p.c)){b[d]=1;best=Math.max(best,capturesAt(b,G.N,1,(d/G.N)|0,d%G.N).length);b[d]=0}
+  G.lift={id:p.id,threat:best,responded:false};
+  if(S.read)G.thinkAt=Math.min(G.thinkAt,G.t+S.react);
+}
+function cancelHold(){
+  const p=byId(G.held);if(!p)return;
+  const b=board(true);
+  if(b[p.r*G.N+p.c]!==0){
+    const d=dests(b,G.N,p.r,p.c);
+    let to=d[0];if(to===undefined){to=b.findIndex(v=>v===0)}
+    G.held=null;G.lift=null;p.r=(to/G.N)|0;p.c=to%G.N;
+    p.cd=G.t+S.hCd*1000;p.cdLen=Math.max(1,S.hCd*1000);arrive(p);return;
+  }
+  G.held=null;G.lift=null;
+}
+function place(p,r,c){
+  const lf=G.lift;G.held=null;G.lift=null;
+  p.r=r;p.c=c;p.cd=G.t+S.hCd*1000;p.cdLen=Math.max(1,S.hCd*1000);
+  const n=arrive(p);
+  if(lf&&lf.threat>0&&n===0&&lf.responded){G.saves++;addLog(`先回り成功：${sq(r,c)}への狙いを読んでふさいだ`,'read')}
+}
+
+/* ---------- machine ---------- */
+function startMove(p,to){
+  const N=G.N,tr=(to/N)|0,tc=to%N;
+  const dr=Math.sign(tr-p.r),dc=Math.sign(tc-p.c);
+  p.move={dr,dc,tr,tc,prog:0,next:null};
+}
+function startJob(p,to){G.job={pid:p.id,to,stage:'travel',left:0};G.plan={id:p.id,to};G.mmoves++}
+function stepMachine(dt){
+  const j=G.job;if(!j)return;
+  const p=byId(j.pid);
+  if(!p||!p.alive){G.job=null;G.plan=null;return}
+  if(j.stage==='travel'){
+    const dy=p.r-G.head.r,dx=p.c-G.head.c,d=Math.hypot(dx,dy),step=S.free*dt/1000;
+    if(d<=step){G.head={r:p.r,c:p.c};j.stage='engage';j.left=200}
+    else{G.head={r:G.head.r+dy/d*step,c:G.head.c+dx/d*step}}
+    return;
+  }
+  if(j.stage==='engage'){j.left-=dt;if(j.left<=0){j.stage='drag';startMove(p,j.to)}}
+}
+function stepMoves(dt){
+  const N=G.N;
+  for(const p of G.pieces){
+    if(!p.alive||!p.move)continue;
+    const m=p.move;
+    if(!m.next){
+      const nr=p.r+m.dr,nc=p.c+m.dc;
+      const b=board(true);b[p.r*N+p.c]=0;
+      if(nr<0||nr>=N||nc<0||nc>=N||b[nr*N+nc]!==0){endMove(p);continue}
+      m.next=[nr,nc];m.prog=0;
+    }
+    m.prog+=S.speed*dt/1000;
+    if(m.prog>=1){
+      p.r=m.next[0];p.c=m.next[1];m.next=null;m.prog=0;
+      if(p.r===m.tr&&p.c===m.tc){endMove(p)}
+      if(G.phase!=='play')return;
+    }
+  }
+}
+function endMove(p){
+  p.move=null;p.cd=G.t+S.mCd*1000;
+  if(G.job&&G.job.pid===p.id){G.job=null;G.head={r:p.r,c:p.c}}p.cdLen=Math.max(1,S.mCd*1000);
+  if(G.plan&&G.plan.id===p.id)G.plan=null;
+  arrive(p);
+}
+function think(){
+  if(G.job)return;
+  const N=G.N,b=board(false);
+  const W={easy:{ready:0,cool:0},normal:{ready:.35,cool:0},hard:{ready:1,cool:.7}}[S.level];
+  const threats=[];
+  for(const p of G.pieces){
+    if(!p.alive||p.side!=='H')continue;
+    if(p.id===G.held){if(S.read)threats.push({r:p.r,c:p.c,w:1.6,held:true});continue}
+    const rem=Math.max(0,p.cd-G.t);
+    if(rem===0&&W.ready>0)threats.push({r:p.r,c:p.c,w:W.ready,held:false});
+    else if(rem>0&&rem<=1500&&W.cool>0)threats.push({r:p.r,c:p.c,w:W.cool,held:false});
+  }
+  const danger=bb=>{
+    let mx=0,sum=0;
+    for(const h of threats){
+      const i=h.r*N+h.c;
+      if(!h.held&&bb[i]!==1)continue;
+      if(!h.held)bb[i]=0;
+      let best=0;
+      for(const d of dests(bb,N,h.r,h.c)){bb[d]=1;const n=capturesAt(bb,N,1,(d/N)|0,d%N).length;bb[d]=0;if(n>best)best=n}
+      if(!h.held)bb[i]=1;
+      mx=Math.max(mx,best*h.w);sum+=best*h.w;
+    }
+    return mx+.25*sum;
+  };
+  const pressure=bb=>{
+    let best=0;
+    for(let i=0;i<N*N;i++){
+      if(bb[i]!==2)continue;bb[i]=0;
+      for(const d of dests(bb,N,(i/N)|0,i%N)){bb[d]=2;const n=capturesAt(bb,N,2,(d/N)|0,d%N).length;bb[d]=0;if(n>best)best=n}
+      bb[i]=2;
+    }
+    return best;
+  };
+  const shape=bb=>{
+    let adj=0,adv=0;
+    for(let i=0;i<N*N;i++){
+      if(bb[i]!==2)continue;const r=(i/N)|0,c=i%N;adv+=r/(N-1);
+      for(const[dr,dc]of DIRS){const rr=r+dr,cc=c+dc;if(rr>=0&&rr<N&&cc>=0&&cc<N&&bb[rr*N+cc]===1)adj++}
+    }
+    return adj*8+adv*30;
+  };
+  const evalB=bb=>-danger(bb.slice())*80*(1-.5*S.aggr)+pressure(bb.slice())*(20+60*S.aggr)+S.aggr*shape(bb);
+  let bestScore=evalB(b),bestMove=null;
+  for(const p of G.pieces){
+    if(!p.alive||p.side!=='M'||G.t<p.cd)continue;
+    const from=p.r*N+p.c;
+    for(const to of dests(b,N,p.r,p.c)){
+      const b2=b.slice();b2[from]=0;b2[to]=2;
+      const caps=capturesAt(b2,N,2,(to/N)|0,to%N);for(const i of caps)b2[i]=0;
+      const dist=Math.abs(((to/N)|0)-p.r)+Math.abs(to%N-p.c);
+      const tm=Math.hypot(p.r-G.head.r,p.c-G.head.c)/S.free+.2+dist/S.speed;
+      const s=caps.length*100+evalB(b2)-tm*4-2;
+      if(s>bestScore+.01){bestScore=s;bestMove={p,to}}
+    }
+  }
+  if(bestMove){
+    startJob(bestMove.p,bestMove.to);
+    if(G.held&&S.read&&G.lift&&!G.lift.responded&&G.lift.threat>0){
+      G.lift.responded=true;
+      const h=byId(G.held);
+      addLog(`読み：${sq(h.r,h.c)}の歩が持ち上がった → ${sq(bestMove.p.r,bestMove.p.c)}から${sq((bestMove.to/N)|0,bestMove.to%N)}へ先回り`,'read');
+    }
+  }
+}
+
+/* ---------- loop ---------- */
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(50,now-last);last=now;
+  if(G.phase==='countdown'){
+    const left=Math.ceil((G.cdEnd-now)/1000);
+    if(now>=G.cdEnd){G.phase='play';G.thinkAt=G.t+S.react;showOverlay(null)}
+    else setCountdown(left);
+  }else if(G.phase==='removing'){
+    G.removeLeft-=dt;if(G.removeLeft<=0){G.phase='play';showOverlay(null)}
+  }else if(G.phase==='play'){
+    G.t+=dt;stepMachine(dt);stepMoves(dt);
+    if(G.phase==='play'&&G.t>=G.thinkAt){think();G.thinkAt=G.t+Math.max(150,S.react)}
+  }
+  render();requestAnimationFrame(frame);
+}
+
+/* ---------- view ---------- */
+function build(){
+  const N=G.N;
+  cellsEl.style.gridTemplateColumns=`repeat(${N},1fr)`;cellsEl.style.gridTemplateRows=`repeat(${N},1fr)`;
+  cellsEl.innerHTML='';cellEls=[];
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const d=document.createElement('div');d.className='cell'+(c===N-1?' lr':'')+(r===N-1?' lb':'');
+    d.setAttribute('role','gridcell');d.setAttribute('aria-label',sq(r,c));
+    const bar=document.createElement('i');bar.className='bar';const s=document.createElement('span');s.className='sec';
+    d.append(bar,s);cellsEl.append(d);cellEls.push({el:d,sec:s,key:''});
+  }
+  layerEl.innerHTML='';komaEls.clear();
+  headEl=document.createElement('div');headEl.className='head';headEl.style.width=headEl.style.height=`${100/N}%`;layerEl.append(headEl);
+  for(const p of G.pieces){
+    const k=document.createElement('div');k.className='koma '+(p.side==='H'?'h':'m');
+    k.style.width=k.style.height=`${100/N}%`;
+    k.innerHTML=`<div class="edge"><div class="shape">${p.side==='H'?'歩':'と'}</div></div>`;
+    layerEl.append(k);komaEls.set(p.id,k);
+  }
+  $('files').style.gridTemplateColumns=`repeat(${N},1fr)`;
+  $('files').innerHTML=Array.from({length:N},(_,c)=>`<span>${N-c}</span>`).join('');
+  $('ranks').style.gridTemplateRows=`repeat(${N},1fr)`;
+  $('ranks').innerHTML=Array.from({length:N},(_,r)=>`<span>${KAN[r]}</span>`).join('');
+  sizeCells();
+}
+function sizeCells(){const w=boardEl.getBoundingClientRect().width;boardEl.style.setProperty('--cell',(w/G.N)+'px')}
+new ResizeObserver(sizeCells).observe(boardEl);
+
+function render(){
+  const N=G.N;
+  const glow=new Float32Array(N*N),secs=new Array(N*N).fill('');
+  for(const p of G.pieces){
+    if(!p.alive||p.move||p.id===G.held)continue;
+    const rem=p.cd-G.t;
+    if(rem>0){const i=p.r*N+p.c;glow[i]=Math.min(1,rem/p.cdLen);secs[i]=(rem/1000).toFixed(1)}
+  }
+  const legal=new Set(),threat=new Set();let origin=-1;
+  const h=G.held?byId(G.held):null;
+  if(h&&(G.phase==='play'||G.phase==='removing')){
+    origin=h.r*N+h.c;
+    for(const d of dests(board(true),N,h.r,h.c))legal.add(d);
+    if(S.read){const b=board(false);for(const d of dests(b,N,h.r,h.c)){b[d]=1;if(capturesAt(b,N,1,(d/N)|0,d%N).length)threat.add(d);b[d]=0}}
+  }
+  const planTo=G.plan?G.plan.to:-1;
+  for(let i=0;i<N*N;i++){
+    const ce=cellEls[i];
+    const key=`${glow[i].toFixed(2)}|${secs[i]}|${legal.has(i)}|${threat.has(i)}|${i===planTo}|${i===origin}`;
+    if(key===ce.key)continue;ce.key=key;
+    ce.el.style.setProperty('--glow',glow[i]);
+    ce.sec.textContent=secs[i];
+    ce.el.classList.toggle('legal',legal.has(i));
+    ce.el.classList.toggle('threat',threat.has(i));
+    ce.el.classList.toggle('plan',i===planTo);
+    ce.el.classList.toggle('origin',i===origin);
+  }
+  for(const p of G.pieces){
+    const k=komaEls.get(p.id);if(!k)continue;
+    if(!p.alive){if(!k.classList.contains('gone')){k.classList.add('gone');setTimeout(()=>k.remove(),550)}continue}
+    let r=p.r,c=p.c;
+    if(p.move&&p.move.next){r+=p.move.dr*p.move.prog;c+=p.move.dc*p.move.prog}
+    k.style.transform=`translate(${c*100}%,${r*100}%)`;
+    k.classList.toggle('held',p.id===G.held);
+    k.classList.toggle('cool',!p.move&&p.cd>G.t&&p.id!==G.held);
+  }
+  {let hr=G.head.r,hc=G.head.c;const j=G.job,jp=j&&byId(j.pid);
+   if(j&&j.stage==='drag'&&jp&&jp.move){hr=jp.r+(jp.move.next?jp.move.dr*jp.move.prog:0);hc=jp.c+(jp.move.next?jp.move.dc*jp.move.prog:0)}
+   headEl.style.transform=`translate(${hc*100}%,${hr*100}%)`;headEl.classList.toggle('busy',!!j)}
+  $('capH').innerHTML=`${G.capH}<small> / ${S.target}</small>`;
+  $('capM').innerHTML=`${G.capM}<small> / ${S.target}</small>`;
+  $('clock').textContent=fmt(G.t);$('saves').textContent=G.saves;$('mmoves').textContent=G.mmoves;
+  $('status').textContent=statusText();
+  if(logDirty)renderLog();
+}
+function fmt(ms){const s=ms/1000;return `${Math.floor(s/60)}:${(s%60).toFixed(1).padStart(4,'0')}`}
+function statusText(){
+  switch(G.phase){
+    case'ready':return'「対局開始」を押すと3秒後に始まります。';
+    case'countdown':return'まもなく開始します。';
+    case'paused':return'一時停止中です。';
+    case'removing':return'駒が取られたので、機械が盤外へ運び出しています。';
+    case'over':return G.winner==='H'?'あなたの勝ちです。':'機械の勝ちです。';
+    default:
+      if(G.held){const h=byId(G.held);return `${sq(h.r,h.c)}の歩を持ち上げています。置くマスをクリック、元のマスで取り消し。`}
+      return'自分の歩をクリックして持ち上げます。';
+  }
+}
+function addLog(text,kind){G.log.unshift({t:G.t,text,kind});if(G.log.length>40)G.log.pop();logDirty=true}
+function renderLog(){
+  logDirty=false;const el=$('log');
+  if(!G.log.length){el.innerHTML='<li class="empty">対局が始まると、取った駒と機械の先回りがここに残ります。</li>';return}
+  el.innerHTML=G.log.map(l=>`<li><time>${fmt(l.t)}</time><span class="${l.kind}">${l.text}</span></li>`).join('');
+}
+function showOverlay(kind,n){
+  if(!kind){overlayEl.hidden=true;return}
+  overlayEl.hidden=false;
+  if(kind==='ready')overlayEl.innerHTML=`<div class="card"><div class="big">対局開始</div><p>ターンはありません。歩をつかんで、好きなときに動かしてください。</p><button class="btn" id="ovStart">開始</button></div>`;
+  if(kind==='countdown')overlayEl.innerHTML=`<div class="card"><div class="big" id="cdNum">3</div></div>`;
+  if(kind==='removing')overlayEl.innerHTML=`<div class="card"><div class="big">回収中</div><p>${n}枚を盤外へ運び出しています</p></div>`;
+  if(kind==='paused')overlayEl.innerHTML=`<div class="card"><div class="big">一時停止</div><button class="btn" id="ovResume">再開</button></div>`;
+  if(kind==='over')overlayEl.innerHTML=`<div class="card"><div class="big">${G.winner==='H'?'あなたの勝ち':'機械の勝ち'}</div><p>${G.capH} 対 ${G.capM}・${fmt(G.t)}・先回り成功 ${G.saves}回</p><button class="btn" id="ovAgain">もう一局</button></div>`;
+  const s=$('ovStart');if(s)s.onclick=start;
+  const rs=$('ovResume');if(rs)rs.onclick=togglePause;
+  const a=$('ovAgain');if(a)a.onclick=()=>{newGame();start()};
+}
+function setCountdown(n){const e=$('cdNum');if(e&&e.textContent!==String(n))e.textContent=n}
+function start(){
+  if(G.phase==='over'||G.phase==='play'||G.phase==='paused')newGame();
+  G.phase='countdown';G.cdEnd=performance.now()+3000;showOverlay('countdown');
+}
+function togglePause(){
+  if(G.phase==='play'){G.phase='paused';showOverlay('paused')}
+  else if(G.phase==='paused'){G.phase='countdown';G.cdEnd=performance.now()+1000;showOverlay('countdown');setCountdown(1)}
+}
+
+/* ---------- settings ---------- */
+$('startBtn').onclick=start;$('pauseBtn').onclick=togglePause;
+function setN(n){
+  S.N=n;S.target=n===7?4:5;$('target').value=S.target;
+  $('n7').setAttribute('aria-pressed',n===7);$('n9').setAttribute('aria-pressed',n===9);
+  newGame();
+}
+$('n7').onclick=()=>setN(7);$('n9').onclick=()=>setN(9);
+$('target').oninput=e=>{const v=parseInt(e.target.value,10);if(v>=1&&v<=9)S.target=v};
+$('diffOn').onchange=e=>S.diffOn=e.target.checked;
+$('diff').oninput=e=>{const v=parseInt(e.target.value,10);if(v>=1)S.diff=v};
+const bindRange=(id,key,fmtF)=>{const el=$(id),out=$(id+'Out');const f=()=>{S[key]=parseFloat(el.value);out.textContent=fmtF(S[key])};el.oninput=f;f()};
+bindRange('hCd','hCd',v=>v.toFixed(1)+' 秒');
+bindRange('mCd','mCd',v=>v.toFixed(1)+' 秒');
+const mm=v=>`${+v.toFixed(2)} マス/秒（${Math.round(v*30)} mm/s）`;
+bindRange('speed','speed',mm);bindRange('free','free',mm);
+bindRange('react','react',v=>v+' ms');
+$('read').onchange=e=>S.read=e.target.checked;
+bindRange('aggr','aggr',v=>Math.round(v*100)+' %');
+const lv={easy:'lvEasy',normal:'lvNormal',hard:'lvHard'};
+for(const[k,id]of Object.entries(lv))$(id).onclick=()=>{S.level=k;for(const[k2,id2]of Object.entries(lv))$(id2).setAttribute('aria-pressed',k2===k)};
+
+newGame();requestAnimationFrame(frame);
+})();
+</script>
