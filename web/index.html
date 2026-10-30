@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>リアルタイムはさみ将棋</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=JetBrains+Mono:wght@400;600&family=Shippori+Mincho+B1:wght@700;800&display=swap">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>リアルタイムはさみ将棋</h1>
+    <p class="sub">実機を作る前に、クールダウンと勝利条件を試すためのシミュレータ</p>
+  </header>
+
+  <div class="stage">
+    <div class="frame">
+      <div class="files" id="files"></div><div></div>
+      <div class="board" id="board" role="grid" aria-label="盤">
+        <div class="cells" id="cells"></div>
+        <div class="layer" id="layer"></div>
+        <div class="overlay" id="overlay" hidden></div>
+      </div>
+      <div class="ranks" id="ranks"></div>
+    </div>
+    <p class="status" id="status"></p>
+    <div class="legend">
+      <span><i class="dot" style="background:var(--amber)"></i>クールダウン中</span>
+      <span><i class="dot" style="background:var(--red)"></i>機械の読み：置かれるとはさまれるマス</span>
+      <span><i class="dot" style="border:3px solid var(--cyan)"></i>機械の駒の行き先</span>
+      <span><i class="dot" style="border:2px solid var(--white-led)"></i>取られて運び出しを待つ駒</span>
+      <span><i class="dot" style="border:2px dashed var(--cyan)"></i>盤の下の電磁石ヘッド</span>
+      <span><i class="dot" style="background:var(--blue)"></i>置けるマス</span>
+    </div>
+  </div>
+
+  <aside>
+    <section class="box" aria-label="スコア">
+      <div class="score">
+        <div class="side"><span class="lbl">あなた（歩）が取った数</span><span class="num" id="capH">0<small> / 4</small></span></div>
+        <div class="side"><span class="lbl">機械（と）が取った数</span><span class="num" id="capM">0<small> / 4</small></span></div>
+      </div>
+      <div class="meta">
+        <span>経過 <b id="clock">0:00.0</b></span>
+        <span>先回り成功 <b id="saves">0</b></span>
+        <span>機械の手数 <b id="mmoves">0</b></span>
+      </div>
+      <div class="btns">
+        <button class="btn" id="startBtn">対局開始</button>
+        <button class="btn ghost" id="pauseBtn">一時停止</button>
+      </div>
+    </section>
+
+    <section class="box" aria-label="ルール設定">
+      <h2>ルール</h2>
+      <div class="inline">
+        <span>盤</span>
+        <div class="seg" role="group" aria-label="盤の大きさ">
+          <button id="n7" aria-pressed="true">7×7</button>
+          <button id="n9" aria-pressed="false">9×9</button>
+        </div>
+      </div>
+      <div class="inline">
+        <label for="target">先取</label><input type="number" id="target" min="1" max="9" value="4"><span>枚で勝ち</span>
+      </div>
+      <div class="inline">
+        <label class="check"><input type="checkbox" id="diffOn">差でも勝ち</label>
+        <input type="number" id="diff" min="1" max="6" value="2" aria-label="勝ちになる枚数差"><span>枚差</span>
+      </div>
+      <div class="row">
+        <label for="hCd">あなたのクールダウン（駒ごと）</label><output id="hCdOut">3.0 秒</output>
+        <input type="range" id="hCd" min="0" max="10" step="0.5" value="3">
+      </div>
+      <div class="row">
+        <label for="mCd">機械のクールダウン（駒ごと）</label><output id="mCdOut">1.0 秒</output>
+        <input type="range" id="mCd" min="0" max="6" step="0.5" value="1">
+      </div>
+    </section>
+
+    <section class="box" aria-label="機械の設定">
+      <h2>機械</h2>
+      <div class="inline">
+        <span>強さ</span>
+        <div class="seg" role="group" aria-label="機械の強さ">
+          <button id="lvEasy" aria-pressed="false">やさしい</button>
+          <button id="lvNormal" aria-pressed="true">ふつう</button>
+          <button id="lvHard" aria-pressed="false">つよい</button>
+        </div>
+      </div>
+      <p class="hint" style="margin:0;font-size:12px;color:var(--muted)">やさしいは持ち上げた駒だけを読み、つよいは動かせる駒すべての狙いを常に見張ります。</p>
+      <div class="row">
+        <label for="aggr">攻め気</label><output id="aggrOut">50 %</output>
+        <input type="range" id="aggr" min="0" max="1" step="0.05" value="0.5">
+        <span class="hint">高いほど、多少危なくても前に出て、はさむ形を作りにいきます。</span>
+      </div>
+      <div class="row">
+        <label for="free">空送り速度（駒の下へ向かう）</label><output id="freeOut"></output>
+        <input type="range" id="free" min="1" max="10" step="0.5" value="4">
+      </div>
+      <div class="row">
+        <label for="speed">駒を引く速度</label><output id="speedOut"></output>
+        <input type="range" id="speed" min="0.5" max="6" step="0.25" value="1.5">
+        <span class="hint">1マス3cmとして換算しています。電磁石のヘッドは盤の下に一つだけで、動かす駒の真下まで移動し、0.2秒かけて吸着してから引っぱります。実機で測った値に合わせて調整してください。</span>
+      </div>
+      <div class="row">
+        <label for="react">反応時間</label><output id="reactOut">250 ms</output>
+        <input type="range" id="react" min="50" max="1000" step="50" value="250">
+        <span class="hint">センサの読み取りから動き出すまでの遅れです。</span>
+      </div>
+      <label class="check"><input type="checkbox" id="read" checked>持ち上げた瞬間に読む（オフにすると、置かれるまで気づかない）</label>
+    </section>
+
+    <section class="box" aria-label="記録">
+      <h2>記録</h2>
+      <ol class="log" id="log"><li class="empty">対局が始まると、取った駒と機械の先回りがここに残ります。</li></ol>
+    </section>
+
+    <section class="box" aria-label="ルールの要点">
+      <h2>遊び方</h2>
+      <ul class="rules">
+        <li>自分の歩をクリックして持ち上げ、行き先をクリックして置きます。元のマスをクリックすると取り消し（Escキーでも可）。</li>
+        <li>駒は縦横にまっすぐ何マスでも進めます。駒は飛び越えられません。</li>
+        <li>相手の駒を縦か横に自分の駒ではさむと取れます。自分から敵の間に入った駒は取られません。隅の囲み取りはなしです。</li>
+        <li>動かした駒はクールダウンが終わるまで動かせません。持ち上げている間の駒は盤上にないので、はさまれません。</li>
+        <li>駒が取られると試合が止まり、機械が盤外へ運び出してから再開します。</li>
+        <li>機械の駒が動いている途中で行く手に駒を置くと、その手前で止まります。</li>
+      </ul>
+    </section>
+  </aside>
+</div>
+</body>
+</html>
