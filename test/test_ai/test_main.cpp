@@ -1,6 +1,8 @@
 #include <unity.h>
+#include <cstdio>
 #include <cstring>
 #include "Ai.h"
+#include "AiCase.h"
 #include "Board.h"
 
 // Build a snapshot from rows separated by '\n': '.' empty, 'H' human, 'M' machine,
@@ -196,6 +198,75 @@ void test_cooldown_piece_not_moved() {
   TEST_ASSERT_TRUE(m.none || m.pieceId != 1);
 }
 
+// test/golden/ai_cases.txt, relative to the project directory (where `pio test` runs).
+static FILE* openGolden() {
+  const char* paths[] = {"test/golden/ai_cases.txt", "../test/golden/ai_cases.txt", "../../test/golden/ai_cases.txt"};
+  for (const char* p : paths) {
+    FILE* f = std::fopen(p, "r");
+    if (f) return f;
+  }
+  return nullptr;
+}
+
+void test_ai_case_parser() {
+  AiCase c;
+  TEST_ASSERT_FALSE(parseAiCase("# comment", c));
+  TEST_ASSERT_FALSE(parseAiCase("", c));
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... 2,1 0.5,1.25 0,0=700 3,1.5,100,250,H,0.25,0 0,0>1,0", c));
+  TEST_ASSERT_EQUAL_INT(3, c.snap.board.n);
+  TEST_ASSERT_EQUAL_INT(3, c.snap.count);  // M(0,0), H(1,1), held H at (2,1)
+  TEST_ASSERT_EQUAL_INT(MACHINE, c.snap.pieces[0].side);
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS + 700, c.snap.pieces[0].cooldownUntil);
+  TEST_ASSERT_EQUAL_INT(1, c.snap.heldCount);
+  TEST_ASSERT_EQUAL_INT(3, c.snap.heldIds[0]);
+  TEST_ASSERT_TRUE(c.snap.pieces[2].held);
+  TEST_ASSERT_EQUAL_INT(EMPTY, c.snap.board.at(2, 1));
+  TEST_ASSERT_EQUAL_FLOAT(0.5f, c.snap.headR);
+  TEST_ASSERT_EQUAL_FLOAT(1.25f, c.snap.headC);
+  TEST_ASSERT_EQUAL_FLOAT(3.0f, c.params.freeSpeed);
+  TEST_ASSERT_EQUAL_FLOAT(1.5f, c.params.dragSpeed);
+  TEST_ASSERT_EQUAL_UINT32(100, c.params.engageMs);
+  TEST_ASSERT_EQUAL_INT((int)Level::Hard, (int)c.params.level);
+  TEST_ASSERT_EQUAL_FLOAT(0.25f, c.params.aggression);
+  TEST_ASSERT_FALSE(c.params.readLift);
+  TEST_ASSERT_FALSE(c.expectNone);
+  TEST_ASSERT_EQUAL_INT(1, c.toR);
+  // Malformed lines.
+  TEST_ASSERT_FALSE(parseAiCase("M...H... - 0,0 - 3,1.5,100,250,H,0.25,0 none", c));    // 8 cells
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - 3,1.5,100,250,X,0.25,0 none", c));   // level
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... 1,1 0,0 - 3,1.5,100,250,H,0.25,0 none", c)); // held on a piece
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - 3,1.5,100,250,H,0.25,0", c));        // missing field
+}
+
+void test_golden_cases() {
+  FILE* f = openGolden();
+  TEST_ASSERT_NOT_NULL_MESSAGE(f, "test/golden/ai_cases.txt not found");
+  char line[512];
+  int cases = 0, failures = 0, lineNo = 0;
+  while (std::fgets(line, sizeof(line), f)) {
+    lineNo++;
+    if (isAiCaseSkippable(line)) continue;
+    AiCase c;
+    char msg[96];
+    snprintf(msg, sizeof(msg), "line %d does not parse", lineNo);
+    TEST_ASSERT_TRUE_MESSAGE(parseAiCase(line, c), msg);
+    AiMove m;
+    if (!checkAiCase(c, &m)) {
+      failures++;
+      if (m.none) {
+        printf("golden line %d: got none (score %.3f)\n", lineNo, (double)m.score);
+      } else {
+        const PieceView& p = c.snap.pieces[m.pieceId - 1];
+        printf("golden line %d: got %d,%d>%d,%d (score %.3f)\n", lineNo, p.r, p.c, m.toR, m.toC, (double)m.score);
+      }
+    }
+    cases++;
+  }
+  std::fclose(f);
+  TEST_ASSERT_TRUE(cases >= 20);
+  TEST_ASSERT_EQUAL_INT(0, failures);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_picks_capture);
@@ -203,5 +274,7 @@ int main(int, char**) {
   RUN_TEST(test_no_read_easy_passive_does_nothing);
   RUN_TEST(test_tie_prefers_piece_nearer_head);
   RUN_TEST(test_cooldown_piece_not_moved);
+  RUN_TEST(test_ai_case_parser);
+  RUN_TEST(test_golden_cases);
   return UNITY_END();
 }

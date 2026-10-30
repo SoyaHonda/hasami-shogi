@@ -1,6 +1,8 @@
 #include <unity.h>
 #include <cmath>
+#include <cstdio>
 #include "Game.h"
+#include "LedPlan.h"
 #include "MachineController.h"
 #include "Path.h"
 #include "VirtualGantry.h"
@@ -420,6 +422,143 @@ void test_virtual_gantry_drag_to_reserve_rows() {
   TEST_ASSERT_EQUAL_INT((int)MagnetMode::RepelWeak, (int)vg.magnetMode());
 }
 
+// ---- ledPlan ----
+
+static bool sameRgb(Rgb a, Rgb b) { return a.r == b.r && a.g == b.g && a.b == b.b; }
+#define ASSERT_RGB(expected, actual)                                                           \
+  do {                                                                                         \
+    Rgb e_ = (expected), a_ = (actual);                                                        \
+    char msg_[64];                                                                             \
+    snprintf(msg_, sizeof(msg_), "got (%d,%d,%d)", a_.r, a_.g, a_.b);                          \
+    TEST_ASSERT_TRUE_MESSAGE(sameRgb(e_, a_), msg_);                                           \
+  } while (0)
+
+void test_led_held_destinations_are_blue() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 3, 3000));
+  Rgb out[49];
+  ledPlan(g, mc, 3000, out);
+  for (int r = 0; r < 7; r++) {
+    for (int c = 0; c < 7; c++) {
+      const bool blue = c == 3 && r >= 1 && r <= 5;  // up to the machine piece at (0,3)
+      ASSERT_RGB(blue ? LED_BLUE : LED_OFF, out[r * 7 + c]);
+    }
+  }
+}
+
+void test_led_cooldown_red_proportional() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  g.onHumanLift(6, 0, 3000);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 0, 3000));  // cooldown 3000 ms
+  Rgb out[49];
+  ledPlan(g, mc, 3000, out);
+  ASSERT_RGB((Rgb{255, 0, 0}), out[3 * 7 + 0]);
+  g.tick(4500);  // 1500 ms left
+  ledPlan(g, mc, 4500, out);
+  ASSERT_RGB((Rgb{127, 0, 0}), out[3 * 7 + 0]);
+  g.tick(5250);  // 750 ms left
+  ledPlan(g, mc, 5250, out);
+  ASSERT_RGB((Rgb{63, 0, 0}), out[3 * 7 + 0]);
+  g.tick(6000);
+  ledPlan(g, mc, 6000, out);
+  ASSERT_RGB(LED_OFF, out[3 * 7 + 0]);
+}
+
+void test_led_job_destination_is_purple() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  step(g, mc, 3000);
+  mc.takeSnapshot(3000);
+  mc.onThinkResult(move(mId(0), 3, 0), 3000);
+  TEST_ASSERT_TRUE(mc.job().active);
+  Rgb out[49];
+  ledPlan(g, mc, 3000, out);
+  for (int i = 0; i < 49; i++) ASSERT_RGB(i == 3 * 7 + 0 ? LED_PURPLE : LED_OFF, out[i]);
+}
+
+void test_led_read_lift_threat_is_yellow() {
+  for (int readLift = 0; readLift < 2; readLift++) {
+    Game g;
+    startPlay(g);
+    Params p;
+    p.readLift = readLift != 0;
+    VirtualGantry vg(p, 0.0f, 3.0f);
+    MachineController mc(g, vg, p);
+    teleport(g, mId(3), 3, 3);
+    teleport(g, hId(4), 3, 4);
+    // H from (6,2) to (3,2) would capture M(3,3) against H(3,4).
+    TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 2, 3000));
+    Rgb out[49];
+    ledPlan(g, mc, 3000, out);
+    ASSERT_RGB(readLift ? LED_YELLOW : LED_BLUE, out[3 * 7 + 2]);
+    ASSERT_RGB(LED_BLUE, out[4 * 7 + 2]);
+    ASSERT_RGB(LED_BLUE, out[2 * 7 + 2]);
+  }
+}
+
+void test_led_removal_blinks_white() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  teleport(g, mId(3), 3, 3);
+  teleport(g, hId(4), 3, 4);
+  g.onHumanLift(6, 2, 3000);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 2, 3000));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
+  Rgb out[49];
+  ledPlan(g, mc, 3000, out);  // 3000/500 = 6: lit
+  ASSERT_RGB(LED_WHITE, out[3 * 7 + 3]);
+  ledPlan(g, mc, 3500, out);
+  ASSERT_RGB(LED_OFF, out[3 * 7 + 3]);
+  ledPlan(g, mc, 4000, out);
+  ASSERT_RGB(LED_WHITE, out[3 * 7 + 3]);
+}
+
+void test_led_violation_blinks() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  g.onHumanLift(6, 1, 3000);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Illegal, (int)g.onHumanPlace(5, 2, 3010));  // diagonal
+  Rgb out[49];
+  ledPlan(g, mc, 3010, out);
+  ASSERT_RGB(LED_RED, out[5 * 7 + 2]);
+  ledPlan(g, mc, 3110, out);
+  ASSERT_RGB(LED_OFF, out[5 * 7 + 2]);
+  ledPlan(g, mc, 3210, out);
+  ASSERT_RGB(LED_RED, out[5 * 7 + 2]);
+  ledPlan(g, mc, 3960, out);  // 950 ms: dark half
+  ASSERT_RGB(LED_OFF, out[5 * 7 + 2]);
+  ledPlan(g, mc, 4010, out);  // 1 s over: plain square again
+  ASSERT_RGB(LED_OFF, out[5 * 7 + 2]);
+  ledPlan(g, mc, 4060, out);
+  ASSERT_RGB(LED_OFF, out[5 * 7 + 2]);
+
+  // The violation wins over blue; its dark half is black.
+  g.reportViolation(4, 1, 5000);
+  ledPlan(g, mc, 5000, out);
+  ASSERT_RGB(LED_RED, out[4 * 7 + 1]);
+  ledPlan(g, mc, 5100, out);
+  ASSERT_RGB(LED_OFF, out[4 * 7 + 1]);
+  ledPlan(g, mc, 6000, out);
+  ASSERT_RGB(LED_BLUE, out[4 * 7 + 1]);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_stage_durations_follow_params);
@@ -432,5 +571,11 @@ int main(int, char**) {
   RUN_TEST(test_dragged_piece_captured_is_removed_from_finished_square);
   RUN_TEST(test_no_route_pauses_then_manual_removal);
   RUN_TEST(test_virtual_gantry_drag_to_reserve_rows);
+  RUN_TEST(test_led_held_destinations_are_blue);
+  RUN_TEST(test_led_cooldown_red_proportional);
+  RUN_TEST(test_led_job_destination_is_purple);
+  RUN_TEST(test_led_read_lift_threat_is_yellow);
+  RUN_TEST(test_led_removal_blinks_white);
+  RUN_TEST(test_led_violation_blinks);
   return UNITY_END();
 }

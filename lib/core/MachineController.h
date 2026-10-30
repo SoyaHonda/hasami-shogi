@@ -26,6 +26,7 @@ class MachineController {
   MachineController(Game& game, IGantry& gantry, const Params& params);
 
   void setParams(const Params& p) { params_ = p; }
+  const Params& params() const { return params_; }
 
   // True when it is time to read: max(150, reactMs) after the last read, or (with readLift)
   // reactMs after the latest lift, whichever is earlier. False outside Play, during a job and
