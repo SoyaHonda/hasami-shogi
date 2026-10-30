@@ -15,6 +15,18 @@ jobs:
       - name: Unit tests (native)
         run: pio test -e native
 
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Install PlatformIO
+        run: pip install platformio
+      - name: Build rig firmware
+        run: pio run -e rig
+
   web:
     runs-on: ubuntu-latest
     steps:
