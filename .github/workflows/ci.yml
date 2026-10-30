@@ -14,3 +14,25 @@ jobs:
         run: pip install platformio
       - name: Unit tests (native)
         run: pio test -e native
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Read emsdk version
+        id: emsdk
+        run: echo "version=$(cat .emsdk-version)" >> "$GITHUB_OUTPUT"
+      - uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: ${{ steps.emsdk.outputs.version }}
+          actions-cache-folder: emsdk-cache
+      - run: npm ci
+      - name: Build WASM
+        run: npm run build:wasm
+      - name: Node.js tests
+        run: npm test
+      - name: Automatic games
+        run: node tools/autoplay.mjs --games 20

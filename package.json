@@ -1,0 +1,16 @@
+{
+  "name": "hasami-shogi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hasami shogi robot: WASM build of the core logic, simulator and automatic games",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:wasm": "node tools/build-wasm.mjs",
+    "test": "node --test \"tools/test/*.test.mjs\"",
+    "serve": "node tools/serve.mjs",
+    "autoplay": "node tools/autoplay.mjs"
+  }
+}
