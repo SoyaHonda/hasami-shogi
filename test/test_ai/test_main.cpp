@@ -208,6 +208,48 @@ static FILE* openGolden() {
   return nullptr;
 }
 
+// Opening: no square in the open where two human pieces could each step in beside it
+// (the human's cooldowns are per piece, so two pieces move back to back).
+void test_hard_does_not_walk_into_two_piece_trap() {
+  Snapshot s = makeSnap("MMMMMMM\n.......\n.......\n.......\n.......\n.......\nHHHHHHH", 0.0f, 3.0f);
+  Params p;
+  p.level = Level::Hard;
+  AiMove m = think(s, p);
+  if (m.none) return;
+  Board b = applyMove(s, m);
+  // The moved piece must not have both side squares (or both vertical neighbours) empty and
+  // reachable from the human back row.
+  const bool openRow = m.toC > 0 && m.toC < 6 && b.at(m.toR, m.toC - 1) == EMPTY && b.at(m.toR, m.toC + 1) == EMPTY;
+  TEST_ASSERT_FALSE(openRow && m.toR >= 1);
+}
+
+// A machine piece between H and an empty square whose human piece stepped away (still cooling
+// down) leaves before that piece can come back.
+void test_hard_leaves_after_flank_steps_away() {
+  Snapshot s = makeSnap("MMM.MMM\n.......\n.......\n.......\nHHHM...\n....H..\n...H.HH", 4.0f, 3.0f);
+  for (int i = 0; i < s.count; i++)
+    if (s.pieces[i].r == 5 && s.pieces[i].c == 4) s.pieces[i].cooldownUntil = s.clockMs + 3000;
+  Params p;
+  p.level = Level::Hard;
+  AiMove m = think(s, p);
+  TEST_ASSERT_FALSE(m.none);
+  const PieceView& q = pieceById(s, m.pieceId);
+  TEST_ASSERT_EQUAL_INT(4, q.r);
+  TEST_ASSERT_EQUAL_INT(3, q.c);
+}
+
+// Sitting between two human pieces is not safe when one can step away and another step in.
+void test_hard_leaves_sandwich_with_refill() {
+  Snapshot s = makeSnap("MMM.MMM\n.......\n.......\n.......\nHHHMHHH\n.......\n....H..", 4.0f, 3.0f);
+  Params p;
+  p.level = Level::Hard;
+  AiMove m = think(s, p);
+  TEST_ASSERT_FALSE(m.none);
+  const PieceView& q = pieceById(s, m.pieceId);
+  TEST_ASSERT_EQUAL_INT(4, q.r);
+  TEST_ASSERT_EQUAL_INT(3, q.c);
+}
+
 void test_ai_case_parser() {
   AiCase c;
   TEST_ASSERT_FALSE(parseAiCase("# comment", c));
@@ -274,6 +316,9 @@ int main(int, char**) {
   RUN_TEST(test_no_read_easy_passive_does_nothing);
   RUN_TEST(test_tie_prefers_piece_nearer_head);
   RUN_TEST(test_cooldown_piece_not_moved);
+  RUN_TEST(test_hard_does_not_walk_into_two_piece_trap);
+  RUN_TEST(test_hard_leaves_after_flank_steps_away);
+  RUN_TEST(test_hard_leaves_sandwich_with_refill);
   RUN_TEST(test_ai_case_parser);
   RUN_TEST(test_golden_cases);
   return UNITY_END();

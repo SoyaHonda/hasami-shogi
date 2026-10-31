@@ -96,7 +96,10 @@ void test_state_shape_and_manual_play() {
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, p.x);
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 4.0f, p.y);
   TEST_ASSERT_EQUAL_INT((int)LiftResult::InCooldown, (int)d.lift(4, 0));
-  // The machine reads and moves on its own.
+  // The machine reads and moves on its own. It does not walk into the open where two human
+  // pieces could close on it, so offer it something: a human piece next to its back row.
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)d.lift(6, 1));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)d.place(1, 1));
   for (int i = 0; i < 1000; i++) d.advance(10);
   s = d.state();
   TEST_ASSERT_TRUE(s.machineMoves > 0);
