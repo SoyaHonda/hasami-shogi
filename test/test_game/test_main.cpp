@@ -134,12 +134,12 @@ void test_capture_removing_countdown_play() {
 
   g.tick(3500);  // the clock does not run while removing
   TEST_ASSERT_EQUAL_UINT32(0, g.clockMs());
-  g.onRemoved(mId(0), 1);
-  TEST_ASSERT_TRUE(g.reserveUsed(MACHINE)[1]);
-  g.onRemoved(mId(1), 2);
+  g.onRemoved(mId(0), -1, 1);
+  TEST_ASSERT_TRUE(g.reserveUsed(-1)[1]);
+  g.onRemoved(mId(1), -1, 2);
   TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
   TEST_ASSERT_EQUAL_INT(1, g.removals(rm));
-  g.onRemoved(mId(2), 3);
+  g.onRemoved(mId(2), -1, 3);
   TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
   TEST_ASSERT_EQUAL_INT(0, g.removals(rm));
   g.tick(4000);
@@ -163,7 +163,7 @@ void test_capture_removing_countdown_play() {
   TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
   TEST_ASSERT_EQUAL_INT(0, g.captured(HUMAN));
   TEST_ASSERT_TRUE(piece(g, mId(0)).alive);
-  TEST_ASSERT_FALSE(g.reserveUsed(MACHINE)[1]);
+  TEST_ASSERT_FALSE(g.reserveUsed(-1)[1]);
 }
 
 void test_diff_win() {
@@ -327,32 +327,58 @@ void test_machine_blocked_then_arrives_and_captures() {
   TEST_ASSERT_EQUAL_INT(hId(5), rm[0].pieceId);
   TEST_ASSERT_EQUAL_INT(2, rm[0].from.r);
   TEST_ASSERT_EQUAL_INT(4, rm[0].from.c);
-  TEST_ASSERT_EQUAL_INT(7, rm[0].toRow);
+  // (2,4) is nearer the machine's edge, so the human piece goes to row -1.
+  TEST_ASSERT_EQUAL_INT(-1, rm[0].toRow);
   TEST_ASSERT_EQUAL_INT(4, rm[0].slotC);
 }
 
-void test_machine_step_while_removing_updates_origin_and_abort() {
+void test_removal_goes_to_nearer_reserve_row() {
   Game g;
   startPlay(g);
-  // Machine piece (0,3) is dragging to (1,3) when the human captures it between H(0,2) and
-  // H(0,4).
+  // M(5,3) between H(5,2) and H moving (6,4) -> (5,4): row 5 is nearer the human's edge.
+  teleport(g, mId(0), 5, 3);
+  teleport(g, hId(2), 5, 2);
+  g.onHumanLift(6, 4, 3000);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 4, 3000));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
+  Removal rm[2 * MAX_N];
+  TEST_ASSERT_EQUAL_INT(1, g.removals(rm));
+  TEST_ASSERT_EQUAL_INT(7, rm[0].toRow);
+  TEST_ASSERT_EQUAL_INT(3, rm[0].slotC);
+  g.onRemoved(mId(0), 7, 3);
+  TEST_ASSERT_TRUE(g.reserveUsed(7)[3]);
+  TEST_ASSERT_FALSE(g.reserveUsed(-1)[3]);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+}
+
+void test_dragged_machine_piece_is_not_captured() {
+  Game g;
+  startPlay(g);
+  // Machine piece (0,3) is dragging to (1,3) when the human closes H(0,2) _ H(0,4) around the
+  // square it is leaving: a piece in motion is off the board for captures, like a lifted one.
   TEST_ASSERT_TRUE(g.machineCanEnter(mId(3), 1, 3));
   teleport(g, mId(2), 3, 6);
   teleport(g, mId(4), 4, 6);
   teleport(g, hId(0), 0, 2);
   g.onHumanLift(6, 4, 3000);
   TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(0, 4, 3000));
-  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
-  // The controller finishes the square in progress, then aborts the job.
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_TRUE(piece(g, mId(3)).alive);
+  TEST_ASSERT_EQUAL_INT(0, g.captured(HUMAN));
+  // Once it has stopped (no reservation), the same shape captures.
   g.onMachineStep(mId(3), 1, 3);
-  g.onMachineAbort(mId(3), 3000);
-  TEST_ASSERT_TRUE(g.reservedCell().r < 0);
-  Removal rm[2 * MAX_N];
-  TEST_ASSERT_EQUAL_INT(1, g.removals(rm));
-  TEST_ASSERT_EQUAL_INT(mId(3), rm[0].pieceId);
-  TEST_ASSERT_EQUAL_INT(1, rm[0].from.r);
-  TEST_ASSERT_EQUAL_INT(3, rm[0].from.c);
-  TEST_ASSERT_EQUAL_INT(-1, rm[0].toRow);
+  g.onMachineArrive(mId(3), 3000);
+  teleport(g, mId(3), 0, 3);
+  teleport(g, hId(4), 6, 4);
+  g.tick(6100);
+  g.onHumanLift(0, 4, 6100);
+  g.onHumanPlace(0, 4, 6100);  // cancel
+  teleport(g, hId(4), 1, 4);
+  g.tick(9200);
+  g.onHumanLift(1, 4, 9200);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(0, 4, 9200));
+  TEST_ASSERT_FALSE(piece(g, mId(3)).alive);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
 }
 
 void test_removal_stuck_and_manual_removal() {
@@ -432,7 +458,8 @@ int main(int, char**) {
   RUN_TEST(test_escape_when_origin_filled_and_no_moves);
   RUN_TEST(test_no_escape_while_legal_moves_exist);
   RUN_TEST(test_machine_blocked_then_arrives_and_captures);
-  RUN_TEST(test_machine_step_while_removing_updates_origin_and_abort);
+  RUN_TEST(test_dragged_machine_piece_is_not_captured);
+  RUN_TEST(test_removal_goes_to_nearer_reserve_row);
   RUN_TEST(test_removal_stuck_and_manual_removal);
   RUN_TEST(test_report_violation);
   RUN_TEST(test_snapshot_excludes_held);

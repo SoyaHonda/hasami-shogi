@@ -122,7 +122,7 @@ void test_removal_magnet_modes() {
     }
     TEST_ASSERT_TRUE(sawEngage);
     TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
-    TEST_ASSERT_TRUE(g.reserveUsed(MACHINE)[3]);
+    TEST_ASSERT_TRUE(g.reserveUsed(-1)[3]);
     TEST_ASSERT_EQUAL_INT((int)MagnetMode::Off, (int)vg.magnetMode());
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, -1.0f, vg.headR());
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 3.0f, vg.headC());
@@ -161,7 +161,7 @@ void test_removal_magnet_modes() {
     }
     TEST_ASSERT_TRUE(sawEngage);
     TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
-    TEST_ASSERT_TRUE(g.reserveUsed(HUMAN)[3]);
+    TEST_ASSERT_TRUE(g.reserveUsed(7)[3]);
     TEST_ASSERT_FLOAT_WITHIN(1e-4f, 7.0f, vg.headR());
 
     // Back to Play: the first read comes reactMs (on the game clock) after resuming.
@@ -317,10 +317,10 @@ void test_capture_mid_drag_aborts_job_and_removes() {
     step(g, mc, now);
   }
   TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
-  TEST_ASSERT_TRUE(g.reserveUsed(MACHINE)[3]);
+  TEST_ASSERT_TRUE(g.reserveUsed(-1)[3]);
 }
 
-void test_dragged_piece_captured_is_removed_from_finished_square() {
+void test_dragged_piece_is_not_captured() {
   Game g;
   startPlay(g);
   Params p;
@@ -336,33 +336,18 @@ void test_dragged_piece_captured_is_removed_from_finished_square() {
     step(g, mc, now);
   }
   TEST_ASSERT_EQUAL_INT(3, g.reservedCell().r);
-  // The human captures the dragged piece at (2,1) against H(2,0).
+  // The piece is passing (2,1) between H(2,0) and a human piece put on (2,2): no capture.
   g.onHumanLift(6, 2, now);
   TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(2, 2, now));
-  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
-  TEST_ASSERT_FALSE(piece(g, mId(1)).alive);
-  while (mc.job().active && !mc.job().removing && now < 20000) {
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_TRUE(piece(g, mId(1)).alive);
+  while (mc.job().active && now < 20000) {
     now += 5;
     step(g, mc, now);
   }
-  // The piece finished the square (3,1) and is carried off from there.
-  Removal rm[2 * MAX_N];
-  TEST_ASSERT_EQUAL_INT(1, g.removals(rm));
-  TEST_ASSERT_EQUAL_INT(mId(1), rm[0].pieceId);
-  TEST_ASSERT_EQUAL_INT(3, rm[0].from.r);
-  TEST_ASSERT_EQUAL_INT(1, rm[0].from.c);
-  bool sawEngageAtSquare = false;
-  while (g.phase() == Phase::Removing && now < 40000) {
-    now += 5;
-    step(g, mc, now);
-    JobView j = mc.job();
-    if (j.active && j.removing && j.stage == Stage::Engage) {
-      sawEngageAtSquare = std::fabs(vg.headR() - 3.0f) < 1e-4f && std::fabs(vg.headC() - 1.0f) < 1e-4f;
-    }
-  }
-  TEST_ASSERT_TRUE(sawEngageAtSquare);
-  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
-  TEST_ASSERT_TRUE(g.reserveUsed(MACHINE)[1]);
+  TEST_ASSERT_EQUAL_INT(5, piece(g, mId(1)).r);
+  TEST_ASSERT_EQUAL_INT(1, piece(g, mId(1)).c);
+  TEST_ASSERT_EQUAL_INT(0, g.captured(HUMAN));
 }
 
 void test_no_route_pauses_then_manual_removal() {
@@ -568,7 +553,7 @@ int main(int, char**) {
   RUN_TEST(test_lift_ignored_without_read_lift);
   RUN_TEST(test_stale_result_is_discarded);
   RUN_TEST(test_capture_mid_drag_aborts_job_and_removes);
-  RUN_TEST(test_dragged_piece_captured_is_removed_from_finished_square);
+  RUN_TEST(test_dragged_piece_is_not_captured);
   RUN_TEST(test_no_route_pauses_then_manual_removal);
   RUN_TEST(test_virtual_gantry_drag_to_reserve_rows);
   RUN_TEST(test_led_held_destinations_are_blue);

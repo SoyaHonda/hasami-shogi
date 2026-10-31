@@ -230,7 +230,13 @@ Winner Game::decideWinner() const {
 }
 
 CaptureResult Game::resolveCaptures(int8_t side, int r, int c) {
-  const Board b = boardWithoutHeld();
+  Board b = boardWithoutHeld();
+  // A machine piece being dragged (it holds the reservation of the square it is sliding into)
+  // is off the board for the human's captures, as a lifted human piece is for the machine's.
+  if (side == HUMAN && reservedBy_ >= 0) {
+    const PieceView* m = byId(reservedBy_);
+    if (m && m->alive) b.set(m->r, m->c, EMPTY);
+  }
   int caps[MAX_N * MAX_N];
   const int k = capturesAt(b, side, r, c, caps);
   if (k == 0) return CaptureResult{0, false};
@@ -259,9 +265,9 @@ int Game::removals(Removal out[]) const {
   for (int i = 0; i < count_; i++) {
     const PieceView& p = pieces_[i];
     if (!removalPending_[p.id]) continue;
-    const int toRow = p.side == HUMAN ? rules_.n : -1;
+    const int toRow = nearerReserveRow(p);
     out[k++] = Removal{p.id, Sq{static_cast<int8_t>(p.r), static_cast<int8_t>(p.c)}, toRow,
-                       pickReserveSlot(reserveUsed_[p.side], rules_.n, p.c)};
+                       pickReserveSlot(reserveUsed(toRow), rules_.n, p.c)};
   }
   return k;
 }
@@ -284,10 +290,16 @@ void Game::finishRemoval(int pieceId) {
   }
 }
 
-void Game::onRemoved(int pieceId, int slotC) {
+int Game::nearerReserveRow(const PieceView& p) const {
+  const int toTop = p.r + 1, toBottom = rules_.n - p.r;
+  if (toTop != toBottom) return toTop < toBottom ? -1 : rules_.n;
+  return p.side == HUMAN ? rules_.n : -1;
+}
+
+void Game::onRemoved(int pieceId, int toRow, int slotC) {
   PieceView* p = byId(pieceId);
   if (!p || !removalPending_[pieceId]) return;
-  if (slotC >= 0 && slotC < rules_.n) reserveUsed_[p->side][slotC] = true;
+  if (slotC >= 0 && slotC < rules_.n) reserveUsed_[toRow < 0 ? 0 : 1][slotC] = true;
   finishRemoval(pieceId);
 }
 
@@ -295,8 +307,9 @@ void Game::onManualRemoval(int pieceId) {
   PieceView* p = byId(pieceId);
   if (!p || !removalPending_[pieceId]) return;
   // The exact slot is unknown; assume the one the machine would have used.
-  const int slot = pickReserveSlot(reserveUsed_[p->side], rules_.n, p->c);
-  if (slot >= 0) reserveUsed_[p->side][slot] = true;
+  const int row = nearerReserveRow(*p);
+  const int slot = pickReserveSlot(reserveUsed(row), rules_.n, p->c);
+  if (slot >= 0) reserveUsed_[row < 0 ? 0 : 1][slot] = true;
   finishRemoval(pieceId);
 }
 

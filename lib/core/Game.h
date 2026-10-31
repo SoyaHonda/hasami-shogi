@@ -14,8 +14,9 @@ struct CaptureResult {
   bool over;
 };
 
-// A captured piece waiting to be carried off: from its square to reserve row toRow
-// (n for human pieces, -1 for machine pieces), column slotC chosen by pickReserveSlot.
+// A captured piece waiting to be carried off: from its square to reserve row toRow (-1 behind
+// the machine's side or n in front of the human's, whichever is nearer; on a tie the piece's
+// own side), column slotC chosen by pickReserveSlot.
 struct Removal {
   int pieceId;
   Sq from;
@@ -60,8 +61,9 @@ class Game {
 
   // Pieces waiting to be carried off, in id order. `out` must hold 2*MAX_N entries.
   int removals(Removal out[]) const;
-  const bool* reserveUsed(int8_t side) const { return reserveUsed_[side]; }
-  void onRemoved(int pieceId, int slotC);
+  // Slots taken in reserve row toRow (-1 or n). Both sides share the two rows.
+  const bool* reserveUsed(int toRow) const { return reserveUsed_[toRow < 0 ? 0 : 1]; }
+  void onRemoved(int pieceId, int toRow, int slotC);
   void onManualRemoval(int pieceId);
   void onRemovalStuck(int pieceId, uint32_t now);
   int stuckId() const { return stuckId_; }
@@ -95,6 +97,7 @@ class Game {
   void unhold(int id);
   CaptureResult resolveCaptures(int8_t side, int r, int c);
   Winner decideWinner() const;
+  int nearerReserveRow(const PieceView& p) const;
   bool removalsLeft() const;
   void finishRemoval(int pieceId);
 
@@ -113,7 +116,7 @@ class Game {
   int reservedR_, reservedC_, reservedBy_;
   int captured_[3];
   bool removalPending_[2 * MAX_N + 1];
-  bool reserveUsed_[3][MAX_N];
+  bool reserveUsed_[2][MAX_N];
   int stuckId_;
   Violation violation_;
 };

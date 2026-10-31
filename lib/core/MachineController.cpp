@@ -167,13 +167,26 @@ void MachineController::startRemoval(uint32_t now) {
     std::memcpy(block, blocked, sizeof(block));
     for (int j = 0; j < k; j++)
       if (j != i) block[rm[j].from.r * n + rm[j].from.c] = true;
-    const PieceView& p = game_.pieces()[rm[i].pieceId - 1];
-    int len = 0, slot = -1;
-    if (!removalPath(b, rm[i].from, rm[i].toRow, game_.reserveUsed(p.side), block, path_, len, slot)) continue;
+    // Carry it to whichever reserve row has the shorter route; on a tie, the row Game suggests
+    // (the nearer edge, or the piece's own side).
+    int len = 0, slot = -1, row = rm[i].toRow;
+    const int other = rm[i].toRow < 0 ? n : -1;
+    Sq alt[REMOVAL_MAX_POINTS];
+    int altLen = 0, altSlot = -1;
+    const bool hasMain = removalPath(b, rm[i].from, row, game_.reserveUsed(row), block, path_, len, slot);
+    const bool hasAlt = removalPath(b, rm[i].from, other, game_.reserveUsed(other), block, alt, altLen, altSlot);
+    if (hasAlt && (!hasMain || altLen < len)) {
+      std::memcpy(path_, alt, sizeof(Sq) * altLen);
+      len = altLen;
+      slot = altSlot;
+      row = other;
+    } else if (!hasMain) {
+      continue;
+    }
     active_ = true;
     removing_ = true;
     pieceId_ = rm[i].pieceId;
-    toR_ = rm[i].toRow;
+    toR_ = row;
     toC_ = slot;
     slotC_ = slot;
     pathLen_ = len;
@@ -218,9 +231,9 @@ void MachineController::updateRemovalJob(uint32_t now) {
     gantry_.dragTo(s.r, s.c);
     return;
   }
-  const int id = pieceId_, slot = slotC_;
+  const int id = pieceId_, row = toR_, slot = slotC_;
   endJob();
-  game_.onRemoved(id, slot);
+  game_.onRemoved(id, row, slot);
 }
 
 JobView MachineController::job() const {

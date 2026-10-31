@@ -18,7 +18,7 @@
 
 ## 3. 仕様（ロジックが満たすこと）
 
-ルール: 7×7（`Rules::n` で9まで可）、各7枚、人間は最下段、機械は最上段。縦横に何マスでも、飛び越えなし。動いた側だけがはさみ判定をする（自分から入った駒は取られない）。一直線に並んだ複数枚はまとめて取る。盤端に達する列は取らない。隅の囲み取りはなし。駒ごとのクールダウン（人間3秒、機械1秒）。人間は持ち上げて置き、元のマスに戻すと取り消し（クールダウンなし）。持ち上げ中の駒は盤上にないものとして扱い、はさまれない。持ち上げ中は最大2枚。取りが起きたら Removing に入り、機械が取られた駒を全部盤外へ運び終えたら Countdown（1秒）を経て Play に戻る。4枚先取（`diffOn` で枚数差の勝ちも可）。勝負が決まった取りでは運び出さずに Over。ゲーム時計は Play 中だけ進み、クールダウンもこの時計で測る。ジョブ中に取りが起きたら、引いている途中の1マスだけ引き終えてジョブを打ち切り（到着処理はしない、確保は解く）、運び出しに移る。引いていた駒が取られた場合は、引き終えたマスから運び出す。
+ルール: 7×7（`Rules::n` で9まで可）、各7枚、人間は最下段、機械は最上段。縦横に何マスでも、飛び越えなし。動いた側だけがはさみ判定をする（自分から入った駒は取られない）。一直線に並んだ複数枚はまとめて取る。盤端に達する列は取らない。隅の囲み取りはなし。駒ごとのクールダウン（人間3秒、機械1秒）。人間は持ち上げて置き、元のマスに戻すと取り消し（クールダウンなし）。持ち上げ中の駒は盤上にないものとして扱い、はさまれない。機械が引いている途中の駒も同じく盤上にないものとして扱い、はさまれない（2026-10-31 変更）。持ち上げ中は最大2枚。取りが起きたら Removing に入り、機械が取られた駒を全部盤外へ運び終えたら Countdown（1秒）を経て Play に戻る。4枚先取（`diffOn` で枚数差の勝ちも可）。勝負が決まった取りでは運び出さずに Over。ゲーム時計は Play 中だけ進み、クールダウンもこの時計で測る。ジョブ中に取りが起きたら、引いている途中の1マスだけ引き終えてジョブを打ち切り（到着処理はしない、確保は解く）、運び出しに移る。取られた駒は、奥（行 −1）と手前（行 n）の置き場のうち経路が短いほうへ運ぶ（同じなら近い辺、それも同じならその駒の側。2026-10-31 変更）。
 
 機械の移動: 一度に一つのジョブだけ。ジョブは、ヘッドを駒の下へ空送り（速度 `freeSpeed`、マスの境目に沿う折れ線。経路は `Path.h` の `travelPath` で決め、実物と仮想のステージで共通）→ 吸着（`engageMs`）→ 1マスずつ引く（速度 `dragSpeed`）。次のマスへ入る前に空きを確かめて確保し、確保したマスには人間は置けない。行く手が埋まったら手前で止まり、止まったマスで到着処理（はさみ判定）をする。
 
@@ -303,7 +303,7 @@ path: 空きマスだけを通る（障害のある盤で経路の全マスが�
 `onHumanLift`: Play 以外は NotPlaying、人間の駒でなければ NotHumanPiece、クールダウン中は InCooldown、すでに2枚なら TooMany。InCooldown と TooMany は反則として記録する。
 `onHumanPlace`: Play 以外なら `PlaceResult::NotPlaying`（列挙に足す）。対応付けは5.2のとおり（元のマスなら取り消し、合法な駒が複数なら元のマスが近い方、同じなら id の小さい方、確保中のマスは Illegal、どれも不合法なら Illegal として反則を記録し状態を変えない）。元のマスが埋まり（機械が入った等）合法な行き先もない駒は、どの空きマスにも置ける。置いたら人間のクールダウンを付け、人間側のはさみ判定をする。
 機械側: `machineCanEnter` は空きで確保されていなければ確保して true（持ち上げ中の駒の元のマスは空きとみなす）。`onMachineStep` は駒をそのマスへ動かし確保を解く。Removing 中でも呼べて、取られた駒なら運び出しの元のマスを更新する。`onMachineArrive` は機械のクールダウンを付け、機械側のはさみ判定。`void onMachineAbort(int pieceId, uint32_t now)` を足し、ジョブ打ち切りで確保を解きクールダウンを付ける（到着処理はしない）。
-取り: 取られた駒を `alive=false` にし、取った数を足す。勝負が決まれば Over（運び出しなし）、そうでなければ Removing に入り、取られた駒を運び出し待ちに積む。`removals` は運び出し待ちの駒ごとに id、元のマス、置き場の行（人間の駒は n、機械の駒は −1）と、`pickReserveSlot` で仮に選んだ列を返す。Game は置き場の使用状況 `reserveUsed(int8_t side)` を持つ。`onRemoved(pieceId, slotC)` と `onManualRemoval(pieceId)` で運び出し済みにし、全部終われば Countdown（`resumeCountdownMs`）へ。`void onRemovalStuck(int pieceId, uint32_t now)` を足し、Paused にして `stuckId()` を立てる。`stuckId` が立っている間は `togglePause` で再開しない。
+取り: 取られた駒を `alive=false` にし、取った数を足す。勝負が決まれば Over（運び出しなし）、そうでなければ Removing に入り、取られた駒を運び出し待ちに積む。`removals` は運び出し待ちの駒ごとに id、元のマス、置き場の行（近い辺の行、同じならその駒の側）と、`pickReserveSlot` で仮に選んだ列を返す。Game は置き場の行ごとの使用状況 `reserveUsed(int toRow)` を持ち、両者で共有する。`onRemoved(pieceId, toRow, slotC)` と `onManualRemoval(pieceId)` で運び出し済みにし、全部終われば Countdown（`resumeCountdownMs`）へ。`void onRemovalStuck(int pieceId, uint32_t now)` を足し、Paused にして `stuckId()` を立てる。`stuckId` が立っている間は `togglePause` で再開しない。
 反則: `void reportViolation(int r, int c, uint32_t now)` と `lastViolation()`（マスとゲーム時計でなく `now` の時刻）を持つ。
 読み出し: `phase()`、`winner()`、`clockMs()`、`captured(side)`、`pieces()`、`heldIds()`、`reservedCell()`、`boardWithoutHeld()`、`boardWithReserve()`、`snapshot(headR, headC)`。
 
@@ -328,7 +328,7 @@ path: 空きマスだけを通る（障害のある盤で経路の全マスが�
 
 **Test**:
 ai: 取れる手を選ぶ、Easy＋readLift で持ち上げた駒の狙いをふさぐか逃げる（選んだ手のあとの危険度が0）、readLift=false＋Easy＋aggression=0 で `none`、同点ならヘッドに近い駒を選ぶ。
-machine（`VirtualGantry` を使う）: 空送り・吸着・1マス引くの各段階の所要時間が `Params` どおり（±1刻み）、運び出しで人間の駒は `PullHuman`・機械の駒は `PullMachine`、`wantsThink` がジョブ中と結果待ちの間は偽、持ち上げから `reactMs` で真（readLift=false では早まらない）、不合法になった読みの結果を捨てる、引いている途中の取りでジョブを打ち切って運び出す（引いていた駒が取られた場合は引き終えたマスから運ぶ）、経路なしで Paused になり `onManualRemoval` で Countdown へ。
+machine（`VirtualGantry` を使う）: 空送り・吸着・1マス引くの各段階の所要時間が `Params` どおり（±1刻み）、運び出しで人間の駒は `PullHuman`・機械の駒は `PullMachine`、`wantsThink` がジョブ中と結果待ちの間は偽、持ち上げから `reactMs` で真（readLift=false では早まらない）、不合法になった読みの結果を捨てる、引いている途中の取りでジョブを打ち切って運び出す（引いている途中の駒ははさまれない）、経路なしで Paused になり `onManualRemoval` で Countdown へ。
 
 **Verify**: `pio test -e native` で test_ai と test_machine を含む全件が通る。
 
