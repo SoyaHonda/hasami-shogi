@@ -214,12 +214,12 @@ CaptureResult Game::onMachineArrive(int pieceId, uint32_t now) {
   return resolveCaptures(MACHINE, p->r, p->c);
 }
 
-void Game::onMachineAbort(int pieceId, uint32_t now) {
+void Game::onMachineAbort(int pieceId, uint32_t now, bool moved) {
   advance(now);
   PieceView* p = byId(pieceId);
   if (!p) return;
   if (reservedBy_ == pieceId) reservedR_ = reservedC_ = reservedBy_ = -1;
-  p->cooldownUntil = clock_ + rules_.machineCooldownMs;
+  if (moved) p->cooldownUntil = clock_ + rules_.machineCooldownMs;
 }
 
 Winner Game::decideWinner() const {

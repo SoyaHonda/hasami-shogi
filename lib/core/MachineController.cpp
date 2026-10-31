@@ -17,6 +17,7 @@ MachineController::MachineController(Game& game, IGantry& gantry, const Params& 
       stage_(Stage::Travel),
       engageUntil_(0),
       dragging_(false),
+      moved_(false),
       nextR_(-1),
       nextC_(-1),
       pathLen_(0),
@@ -67,6 +68,7 @@ void MachineController::onThinkResult(const AiMove& m, uint32_t now) {
   toC_ = m.toC;
   stage_ = Stage::Travel;
   dragging_ = false;
+  moved_ = false;
   gantry_.magnet(MagnetMode::Off);
   gantry_.travelTo(static_cast<float>(p.r), static_cast<float>(p.c));
 }
@@ -106,6 +108,7 @@ void MachineController::updateMoveJob(uint32_t now) {
   if (dragging_) {
     // The square in progress is always finished, whatever happened meanwhile.
     dragging_ = false;
+    moved_ = true;
     game_.onMachineStep(pieceId_, nextR_, nextC_);
     if (game_.phase() == Phase::Play && nextR_ == toR_ && nextC_ == toC_) {
       game_.onMachineArrive(pieceId_, now);
@@ -116,7 +119,7 @@ void MachineController::updateMoveJob(uint32_t now) {
   const Phase ph = game_.phase();
   if (ph == Phase::Removing || ph == Phase::Over) {
     // A capture (or the end of the game) during the job: abort without an arrival.
-    game_.onMachineAbort(pieceId_, now);
+    game_.onMachineAbort(pieceId_, now, moved_);
     endJob();
     return;
   }

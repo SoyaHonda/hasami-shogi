@@ -56,8 +56,9 @@ class Game {
   void onMachineStep(int pieceId, int r, int c);
   // Sets the machine cooldown and checks captures by the machine at the piece's square.
   CaptureResult onMachineArrive(int pieceId, uint32_t now);
-  // Job aborted: releases the reservation and sets the cooldown (no arrival).
-  void onMachineAbort(int pieceId, uint32_t now);
+  // Job aborted: releases the reservation (no arrival). The cooldown is set only if the piece
+  // moved at least one square; a piece that never left its square can move again at once.
+  void onMachineAbort(int pieceId, uint32_t now, bool moved);
 
   // Pieces waiting to be carried off, in id order. `out` must hold 2*MAX_N entries.
   int removals(Removal out[]) const;

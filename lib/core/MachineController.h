@@ -66,6 +66,7 @@ class MachineController {
   uint32_t engageUntil_;
   // Square being pulled into (valid while dragging_).
   bool dragging_;
+  bool moved_;  // the move job's piece has completed at least one square
   int nextR_, nextC_;
   // Removal route.
   Sq path_[REMOVAL_MAX_POINTS];

@@ -320,6 +320,36 @@ void test_capture_mid_drag_aborts_job_and_removes() {
   TEST_ASSERT_TRUE(g.reserveUsed(-1)[3]);
 }
 
+void test_capture_before_piece_moves_sets_no_cooldown() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 6.0f);  // head far from the piece: a long free move first
+  MachineController mc(g, vg, p);
+  teleport(g, mId(3), 3, 3);
+  teleport(g, hId(2), 3, 2);
+  uint32_t now = 3000;
+  step(g, mc, now);
+  mc.takeSnapshot(now);
+  mc.onThinkResult(move(mId(0), 5, 0), now);
+  TEST_ASSERT_EQUAL_INT((int)Stage::Travel, (int)mc.job().stage);
+  // The human captures another piece while the head is still on its way.
+  now += 100;
+  step(g, mc, now);
+  g.onHumanLift(6, 4, now);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 4, now));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
+  while (mc.job().active && !mc.job().removing && now < 20000) {
+    now += 5;
+    step(g, mc, now);
+  }
+  // The piece never left (0,0), so it gets no cooldown.
+  TEST_ASSERT_EQUAL_INT(0, piece(g, mId(0)).r);
+  TEST_ASSERT_EQUAL_INT(0, piece(g, mId(0)).c);
+  TEST_ASSERT_TRUE(piece(g, mId(0)).cooldownUntil <= g.clockMs());
+  TEST_ASSERT_TRUE(g.reservedCell().r < 0);
+}
+
 void test_dragged_piece_is_not_captured() {
   Game g;
   startPlay(g);
@@ -553,6 +583,7 @@ int main(int, char**) {
   RUN_TEST(test_lift_ignored_without_read_lift);
   RUN_TEST(test_stale_result_is_discarded);
   RUN_TEST(test_capture_mid_drag_aborts_job_and_removes);
+  RUN_TEST(test_capture_before_piece_moves_sets_no_cooldown);
   RUN_TEST(test_dragged_piece_is_not_captured);
   RUN_TEST(test_no_route_pauses_then_manual_removal);
   RUN_TEST(test_virtual_gantry_drag_to_reserve_rows);
