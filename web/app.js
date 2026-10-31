@@ -60,7 +60,41 @@ function cellFromEvent(e) {
 }
 const heldPiece = () => S.pieces.find((p) => p.held && p.side === HUMAN) || null;
 
+// Drag and drop: pressing a piece lifts it; releasing on another square places it there, releasing
+// off the board or on a square it cannot go to puts it back (a cancel). Releasing on the same square
+// without moving leaves it held, so click-to-lift / click-to-place still works.
+let drag = null; // { id, pointerId, r, c, moved, x, y } with x, y in squares (piece's top-left)
+function dragPos(e) {
+  const b = boardEl.getBoundingClientRect();
+  return [((e.clientX - b.left) / b.width) * N - 0.5, ((e.clientY - b.top) / b.height) * N - 0.5];
+}
+function endDrag() {
+  if (drag && boardEl.hasPointerCapture(drag.pointerId)) boardEl.releasePointerCapture(drag.pointerId);
+  drag = null;
+  boardEl.classList.remove('dragging');
+}
+boardEl.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  [drag.x, drag.y] = dragPos(e);
+  const cell = cellFromEvent(e);
+  if (!cell || cell[0] !== drag.r || cell[1] !== drag.c) drag.moved = true;
+});
+function drop(e, cancelled) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
+  const { id, moved } = drag;
+  endDrag();
+  const h = heldPiece();
+  if (!moved || !h || h.id !== id) return;
+  const cell = cancelled ? null : cellFromEvent(e);
+  const res = cell ? sim.place(cell[0], cell[1]) : null;
+  if (!res || is(res, PlaceResult.Illegal)) sim.place(h.r, h.c);
+  S = sim.state();
+}
+boardEl.addEventListener('pointerup', (e) => drop(e, false));
+boardEl.addEventListener('pointercancel', (e) => drop(e, true));
+
 boardEl.addEventListener('pointerdown', (e) => {
+  if (drag) return;
   const cell = cellFromEvent(e);
   if (!cell) return;
   const [r, c] = cell;
@@ -78,6 +112,15 @@ boardEl.addEventListener('pointerdown', (e) => {
     }
   }
   S = sim.state();
+  // Whatever got lifted under the pointer can be dragged from here.
+  const now = heldPiece();
+  if (now && now.r === r && now.c === c) {
+    drag = { id: now.id, pointerId: e.pointerId, r, c, moved: false, x: c, y: r };
+    [drag.x, drag.y] = dragPos(e);
+    boardEl.setPointerCapture(e.pointerId);
+    boardEl.classList.add('dragging');
+    e.preventDefault();
+  }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
@@ -190,6 +233,11 @@ function ledLook(v) {
 }
 
 function render() {
+  // The game may drop the held piece mid-drag (Esc, reset, phase change).
+  if (drag) {
+    const h = heldPiece();
+    if (!h || h.id !== drag.id) endDrag();
+  }
   const job = S.job;
   const jobPiece = job.active ? job.pieceId : -1;
   const secs = new Array(N * N).fill(''), cdFrac = new Float32Array(N * N);
@@ -240,7 +288,10 @@ function render() {
       }
       k.classList.add('dead');
     }
-    k.style.transform = `translate(${p.x * 100}%,${p.y * 100}%)`;
+    const dragging = drag !== null && drag.moved && p.id === drag.id && p.held;
+    const x = dragging ? drag.x : p.x, y = dragging ? drag.y : p.y;
+    k.style.transform = `translate(${x * 100}%,${y * 100}%)`;
+    k.classList.toggle('dragging', dragging);
     k.classList.toggle('held', p.held);
     k.classList.toggle('cool', p.alive && p.id !== jobPiece && p.cooldownLeft > 0 && !p.held);
   }
@@ -268,8 +319,8 @@ function statusText() {
   if (is(ph, Phase.Removing)) return '駒が取られたので、機械が盤外へ運び出しています。';
   if (is(ph, Phase.Over)) return is(S.winner, Winner.Human) ? 'あなたの勝ちです。' : '機械の勝ちです。';
   const h = heldPiece();
-  if (h) return `${sq(h.r, h.c)}の歩を持ち上げています。置くマスをクリック、元のマスで取り消し。`;
-  return '自分の歩をクリックして持ち上げます。';
+  if (h) return `${sq(h.r, h.c)}の歩を持ち上げています。置くマスで離すかクリック、元のマスで取り消し。`;
+  return '自分の歩をドラッグして動かします（クリックでも可）。';
 }
 
 /* ---------- log ---------- */

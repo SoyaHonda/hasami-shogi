@@ -46,7 +46,7 @@ h1{margin:0;font-family:var(--font-koma);font-weight:800;font-size:clamp(24px,4v
 .frame{display:grid;grid-template-columns:minmax(0,1fr) 22px;grid-template-rows:22px auto;max-width:640px}
 .files{display:grid;font-family:var(--font-num);font-size:12px;color:var(--muted);text-align:center;align-items:end;padding-bottom:3px}
 .ranks{display:grid;font-family:var(--font-koma);font-size:13px;color:var(--muted);align-items:center;justify-items:center}
-.board{position:relative;aspect-ratio:1/1;width:100%;background:var(--acryl);border:1px solid var(--acryl-edge);border-radius:6px;box-shadow:0 1px 0 var(--acryl-edge),0 14px 30px -18px rgba(0,0,0,.35);touch-action:manipulation;user-select:none;-webkit-user-select:none;overflow:hidden;cursor:pointer}
+.board{position:relative;aspect-ratio:1/1;width:100%;background:var(--acryl);border:1px solid var(--acryl-edge);border-radius:6px;box-shadow:0 1px 0 var(--acryl-edge),0 14px 30px -18px rgba(0,0,0,.35);touch-action:none;user-select:none;-webkit-user-select:none;overflow:hidden;cursor:pointer}
 .cells{position:absolute;inset:0;display:grid}
 .cell{position:relative;border-right:1px solid var(--grid);border-bottom:1px solid var(--grid)}
 .cell.lr{border-right:0}.cell.lb{border-bottom:0}
@@ -76,6 +76,10 @@ h1{margin:0;font-family:var(--font-koma);font-weight:800;font-size:clamp(24px,4v
 .koma.held .shape{opacity:.22;transform:scale(.86)}
 .koma.held .edge{filter:none}
 .koma.dead .shape{opacity:.4}
+.koma.dragging{z-index:3}
+.koma.dragging .shape{opacity:.92;transform:scale(1.08)}
+.koma.dragging .edge{filter:drop-shadow(0 1.5px 0 var(--e)) drop-shadow(0 10px 12px rgba(0,0,0,.28))}
+.board.dragging{cursor:grabbing}
 .koma.gone{transition:opacity .5s,transform .5s;opacity:0}
 
 .overlay{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(2px);text-align:center;padding:16px}
