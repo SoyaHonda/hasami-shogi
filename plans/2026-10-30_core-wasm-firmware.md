@@ -24,7 +24,7 @@
 
 運び出し: 取られた駒ごとに、空きマスの中心だけを通る経路を幅優先探索で探し、人間の駒は手前の置き場（行 n）、機械の駒は奥の置き場（行 −1）の空いた位置へ運ぶ。人間の駒を運ぶときは電磁石の向きを反転する。経路がない駒しか残っていなければ、その駒を `stuck` として Paused にし、人が手で置き場へ移したことを `onManualRemoval` で受けて続ける。
 
-機械の読み: 旧シミュレータと同じ点数式。候補は、クールダウンが終わっている機械の駒の合法手すべてと「動かない」。点数 = 取れる枚数×100 + 評価 − 所要時間×4 − 2（動かないときは評価のみ）。評価 = −危険度×80×(1−0.5×攻め気) + 圧力×(20+60×攻め気) + 攻め気×(隣接数×8 + 前進度×30)。危険度は人間の駒が次の一手で取れる枚数の最大値＋0.25×合計で、持ち上げ中の駒は重み1.6（`readLift` が真のとき）、ほかの駒は強さで決める（Easy 0、Normal 動かせる駒0.35、Hard 動かせる駒1.0・残り1.5秒以内0.7・それより長いクールダウン中0.35）。2026-10-31 追加: 人間の別々の駒2枚が続けて動けば取れる形も危険度に数える。機械の駒の列の両端が空きでそれぞれに別の駒が1手で入れる形と、両端が人間の駒で片方がどいて別の駒が入れる形で、値は 列の枚数×2枚の重みの小さいほう×0.8。危険度は 1手と2手の値の最大値＋0.25×1手の合計。圧力は、機械の駒（クールダウンを問わない）が次の一手で取れる枚数の最大値。所要時間 = ヘッドから駒までの直線距離/空送り速度 + 吸着 + 引く距離/引く速度（旧版と同じ見積もり）。駒は id 順、行き先は下・上・右・左の順に調べ、`s > best + 0.01` のときだけ更新する。計算は float で、距離は `sqrtf` で求める（`hypotf` はライブラリごとに結果が違いうる）。読むタイミングは、前回から `max(150, reactMs)` 経ったとき、または `readLift` が真で人間が駒を持ち上げてから `reactMs` 経ったとき（早い方）。ジョブ中と、読みの結果を待っている間は読まない。
+機械の読み: `plans/2026-10-31_ai-time-race.md` の 3.3〜3.11（人間が挟み終える時間と機械が避け始める時間の比較、ヘッドの順番、攻め、手の選び方、強さ）による（2026-11-02 変更。以前は旧シミュレータの点数式）。読むタイミングは、前回から `max(150, reactMs)` 経ったとき、または `readLift` が真で人間が駒を持ち上げてから `reactMs` 経ったとき（早い方）。ジョブ中と、読みの結果を待っている間は読まない。
 
 ## 4. リポジトリ構成
 
@@ -110,12 +110,7 @@ Snapshot snapshot(float headR, float headC) const;      // Ai へ渡す写し
 
 ### 5.3 Ai
 
-```cpp
-struct Snapshot { Board board; /* 持ち上げ中を除く */ PieceView pieces[2*MAX_N]; int count;
-  uint32_t clockMs; float headR, headC; int heldIds[2]; int heldCount; };
-struct AiMove { bool none; int pieceId; int toR, toC; float score; };
-AiMove think(const Snapshot&, const Params&);
-```
+`think(const Snapshot&, const Params&)` は Snapshot だけを読む純粋関数のまま。Snapshot、`AiDebug`、`RaceTime` の形は `plans/2026-10-31_ai-time-race.md` の 3.3〜3.10 と5章による（2026-11-02 変更。以前は持ち上げ中の駒を最大2枚持つ形）。
 
 ### 5.4 IGantry と MachineController
 
@@ -142,20 +137,7 @@ class MachineController { public:
 
 ### 5.5 SimDriver と HumanBot
 
-```cpp
-class SimDriver { public:
-  SimDriver(const Rules&, const Params&, uint32_t seed);
-  void setParams(const Params&); void setRules(const Rules&); // Rules は次の reset で反映
-  void reset(); void start(); void togglePause();
-  void advance(uint32_t dtMs);                   // 時刻を進め、機械は同じスレッドで think
-  LiftResult lift(int r, int c); PlaceResult place(int r, int c);
-  void enableBot(const BotParams&);              // 人間側をボットにする（自動対戦）
-  State state() const;                           // 画面用: 盤、駒、ヘッド、ジョブ、LEDの色、時計、取った数、先回り成功数
-};
-struct BotParams { uint32_t reactMs = 400, holdMs = 600; float greed = 0.8f; };
-```
-
-`HumanBot` は動かせる駒からランダムに1枚を選んで持ち上げ（`reactMs` 後）、`holdMs` だけ持ってから、取れる行き先があれば確率 `greed` でその手、なければ合法手から乱数で選んで置く（合法手がなければ取り消すか、5.2の逃げ道）。種が同じなら同じ対局になる。運び出しが `stuck` で Paused になったら、`SimDriver` は人が手で移した扱いで `onManualRemoval` を呼ぶ（シミュレータと自動対戦が止まらないように）。
+`SimDriver` は時刻を進めて機械を同じスレッドで読ませ、`lift`・`place`（`PlaceResult::Pending` を含む）、`enableBot`、`state()` を公開する。`HumanBot` と `BotParams`（`style` の Random、Trap、Race、Race3、新しいルールへの対応、手の時間のばらつき）は `plans/2026-10-31_ai-time-race.md` の 3.12 による（2026-11-02 変更）。運び出しが `stuck` で Paused になったら、`SimDriver` は人が手で移した扱いで `onManualRemoval` を呼ぶ。
 
 先回り成功数: 持ち上げた時点でその駒に取れる行き先があり、持ち上げ中に機械がジョブを始め、置いた結果取れなかった回数。
 
@@ -171,7 +153,7 @@ struct BotParams { uint32_t reactMs = 400, holdMs = 600; float greed = 0.8f; };
 
 ### 5.8 Node.jsの自動対戦
 
-`tools/autoplay.mjs --games 500 --level easy,normal,hard --hcd 2,3,4 --seed 1` のように条件の組を受け、`advance(10)` の固定刻みで最後まで（ゲーム時計が `--max-min`、既定10分を超えたら引き分けとして打ち切り）回し、条件ごとに引き分けの数、機械の勝率、平均の対局時間、先回り成功数の平均を表で出す（`--csv` でCSV）。
+`tools/autoplay.mjs` の条件、指標、作り直し前との対の比較（`--bot`、`--baseline-out`／`--baseline`）、打ち切り（Game の10分の時間切れ）は `plans/2026-10-31_ai-time-race.md` の 3.13 による（2026-11-02 変更）。
 
 ### 5.9 ファーム
 

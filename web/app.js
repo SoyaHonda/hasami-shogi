@@ -493,6 +493,7 @@ const mm = (v) => `${+v.toFixed(2)} マス/秒（${Math.round(v * 30)} mm/s）`;
 bindRange('speed', () => params.dragSpeed, (v) => { params.dragSpeed = v; applyParams(); }, mm);
 bindRange('free', () => params.freeSpeed, (v) => { params.freeSpeed = v; applyParams(); }, mm);
 bindRange('react', () => params.reactMs, (v) => { params.reactMs = Math.round(v); applyParams(); }, (v) => v + ' ms');
+bindRange('hMove', () => params.humanMoveMs / 1000, (v) => { params.humanMoveMs = Math.round(v * 1000); applyParams(); }, (v) => v.toFixed(2) + ' 秒');
 bindRange('aggr', () => params.aggression, (v) => { params.aggression = v; applyParams(); }, (v) => Math.round(v * 100) + ' %');
 $('read').checked = params.readLift;
 $('read').onchange = (e) => {
