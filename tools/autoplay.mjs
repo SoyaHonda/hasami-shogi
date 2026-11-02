@@ -3,9 +3,10 @@
 //
 //   node tools/autoplay.mjs --games 500 --level easy,normal,hard --hcd 2,3,4 --seed 1 [--csv]
 //
-// Game i of a condition uses seed (--seed + i). A game whose clock passes --max-min minutes is
-// stopped and counted as a draw. Rules and machine parameters not given here are the C++
-// defaults (defaults() of the module).
+// Game i of a condition uses seed (--seed + i). Every game ends in the Game itself: by captures,
+// or at the time limit (--max-min minutes of game clock, Rules::timeLimitMs), where the side with
+// more captures wins and equal captures is a draw. Rules and machine parameters not given here
+// are the C++ defaults (defaults() of the module).
 import { parseArgs } from 'node:util';
 import { loadHasami } from './load-wasm.mjs';
 
@@ -55,7 +56,8 @@ const levelName = (lv) => Object.keys(m.Level).find((k) => m.Level[k] === lv) ??
 
 const games = positiveNumber('games', opts.games, { integer: true });
 const seed0 = positiveNumber('seed', opts.seed, { integer: true, allowZero: true });
-const maxClockMs = positiveNumber('max-min', opts['max-min']) * 60_000;
+const maxClockMs = Math.round(positiveNumber('max-min', opts['max-min']) * 60_000);
+if (maxClockMs > 0xffffffff) usage('--max-min is too large');
 const levels = opts.level
   ? list(opts.level).map((s) => {
       const key = Object.keys(m.Level).find((k) => k.toLowerCase() === s.toLowerCase());
@@ -70,19 +72,19 @@ if (levels.length === 0 || cooldownsMs.length === 0) usage('empty --level or --h
 
 // One game; a new driver each time so that the bot's random sequence starts from `seed`.
 function playOne(level, humanCooldownMs, seed) {
-  const sim = new m.SimDriver({ humanCooldownMs }, { level }, seed >>> 0);
+  const sim = new m.SimDriver({ humanCooldownMs, timeLimitMs: maxClockMs }, { level }, seed >>> 0);
   try {
     sim.enableBot({});
     sim.start();
     // Safety net on simulated time: the clock stands still outside Play.
     const maxSimMs = 3 * maxClockMs + 60_000;
     let simMs = 0;
-    while (sim.phase() !== m.Phase.Over && sim.clockMs() <= maxClockMs && simMs < maxSimMs) {
+    while (sim.phase() !== m.Phase.Over && simMs < maxSimMs) {
       sim.advance(STEP_MS);
       simMs += STEP_MS;
     }
     const s = sim.state();
-    const over = s.phase === m.Phase.Over && s.winner !== m.Winner.None;
+    const over = s.phase === m.Phase.Over;
     return { winner: over ? s.winner : m.Winner.None, clockMs: s.clockMs, saves: s.saves };
   } finally {
     sim.delete();
@@ -97,7 +99,8 @@ for (const level of levels) {
       const r = playOne(level, hcd, seed0 + i);
       if (r.winner === m.Winner.Machine) machine++;
       else if (r.winner === m.Winner.Human) human++;
-      else draws++;
+      else if (r.winner === m.Winner.Draw) draws++;
+      else console.error(`autoplay: seed ${seed0 + i} did not finish (stuck outside Play)`);
       clockSum += r.clockMs;
       savesSum += r.saves;
     }
@@ -137,7 +140,8 @@ if (opts.csv) {
   console.log(widths.map((w) => '-'.repeat(w)).join('  '));
   for (const c of cells) console.log(line(c));
   console.log(
-    `\nseed ${seed0}..${seed0 + games - 1} per condition, draw = no winner within ${maxClockMs / 60_000} min of game clock;` +
-      ' machine_win_rate excludes draws; avg_min = mean game clock; avg_saves = mean pre-emption successes',
+    `\nseed ${seed0}..${seed0 + games - 1} per condition, draw = equal captures at the ${maxClockMs / 60_000} min time limit` +
+      ' (more captures wins there);' +
+      ' machine_win_rate excludes draws and unfinished games; avg_min = mean game clock; avg_saves = mean pre-emption successes',
   );
 }

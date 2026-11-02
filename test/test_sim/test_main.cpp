@@ -5,9 +5,9 @@
 void setUp() {}
 void tearDown() {}
 
-static const uint32_t MAX_CLOCK_MS = 10u * 60u * 1000u;  // game clock limit (draw)
-// Safety net on simulated time so a game stuck outside Play (clock frozen) still ends the loop.
-static const uint32_t MAX_SIM_MS = 3u * MAX_CLOCK_MS;
+// Game's time limit (Rules::timeLimitMs, 10 min) ends every game; this safety net on simulated
+// time only stops a game stuck outside Play (clock frozen).
+static const uint32_t MAX_SIM_MS = 3u * Rules().timeLimitMs;
 
 struct Outcome {
   Phase phase;
@@ -22,7 +22,7 @@ static Outcome autoplay(uint32_t seed, const Params& params = Params()) {
   d.start();
   uint32_t simMs = 0;
   State s = d.state();
-  while (s.phase != Phase::Over && s.clockMs < MAX_CLOCK_MS && simMs < MAX_SIM_MS) {
+  while (s.phase != Phase::Over && simMs < MAX_SIM_MS) {
     d.advance(10);
     simMs += 10;
     s = d.state();
@@ -45,24 +45,41 @@ void test_same_seed_same_game() {
 }
 
 void test_hundred_bot_games_finish() {
-  int over = 0, timeouts = 0, moves = 0;
+  int decided = 0, draws = 0, moves = 0;
   for (uint32_t seed = 1; seed <= 100; seed++) {
     const Outcome o = autoplay(seed);
     char msg[48];
     snprintf(msg, sizeof(msg), "seed %u", (unsigned)seed);
-    TEST_ASSERT_TRUE_MESSAGE(o.phase == Phase::Over || o.clockMs >= MAX_CLOCK_MS, msg);
-    TEST_ASSERT_TRUE_MESSAGE(o.phase != Phase::Paused && o.phase != Phase::Removing, msg);
-    if (o.phase == Phase::Over) {
-      over++;
-      TEST_ASSERT_TRUE_MESSAGE(o.winner != Winner::None, msg);
+    TEST_ASSERT_EQUAL_INT_MESSAGE((int)Phase::Over, (int)o.phase, msg);
+    TEST_ASSERT_TRUE_MESSAGE(o.winner != Winner::None, msg);
+    if (o.winner == Winner::Draw) {
+      draws++;
+      // A draw only comes from the time limit with equal captures.
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(Rules().timeLimitMs, o.clockMs, msg);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(o.capHuman, o.capMachine, msg);
     } else {
-      timeouts++;
+      decided++;
     }
     moves += o.machineMoves;
   }
-  TEST_ASSERT_EQUAL_INT(100, over + timeouts);
-  TEST_ASSERT_TRUE(over > 0);
+  TEST_ASSERT_EQUAL_INT(100, decided + draws);
+  TEST_ASSERT_TRUE(decided > 0);
   TEST_ASSERT_TRUE(moves > 0);
+}
+
+// The bot keeps to the human rules: one piece in hand, and its piece is never put back by the
+// hold limit (it holds for holdMs < maxHoldMs and waits while a placement is pending).
+void test_bot_keeps_to_human_rules() {
+  for (uint32_t seed = 1; seed <= 10; seed++) {
+    SimDriver d(Rules(), Params(), seed);
+    d.enableBot(BotParams());
+    d.start();
+    for (uint32_t t = 0; t < 120000 && d.state().phase != Phase::Over; t += 10) {
+      d.advance(10);
+      TEST_ASSERT_TRUE(d.game().heldCount() <= 1);
+    }
+    TEST_ASSERT_EQUAL_INT(0, d.game().holdTimeouts());
+  }
 }
 
 void test_state_shape_and_manual_play() {
@@ -96,6 +113,19 @@ void test_state_shape_and_manual_play() {
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 0.0f, p.x);
   TEST_ASSERT_FLOAT_WITHIN(1e-6f, 4.0f, p.y);
   TEST_ASSERT_EQUAL_INT((int)LiftResult::InCooldown, (int)d.lift(4, 0));
+  // A placement within 1 s of the previous one is held until the interval has passed.
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)d.lift(6, 6));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Pending, (int)d.place(5, 6));
+  s = d.state();
+  TEST_ASSERT_EQUAL_INT(14, s.pendingId);
+  TEST_ASSERT_EQUAL_INT(5, s.pendingR);
+  TEST_ASSERT_EQUAL_INT(6, s.pendingC);
+  TEST_ASSERT_EQUAL_INT(EMPTY, s.cells[5 * 7 + 6]);
+  for (int i = 0; i < 100; i++) d.advance(10);
+  s = d.state();
+  TEST_ASSERT_EQUAL_INT(-1, s.pendingId);
+  TEST_ASSERT_EQUAL_INT(HUMAN, s.cells[5 * 7 + 6]);
+  for (int i = 0; i < 100; i++) d.advance(10);
   // The machine reads and moves on its own. It does not walk into the open where two human
   // pieces could close on it, so offer it something: a human piece next to its back row.
   TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)d.lift(6, 1));
@@ -112,7 +142,7 @@ void test_events_are_recorded() {
     d.enableBot(BotParams());
     d.start();
     State s = d.state();
-    for (uint32_t t = 0; t < MAX_SIM_MS && s.phase != Phase::Over && s.clockMs < MAX_CLOCK_MS; t += 10) {
+    for (uint32_t t = 0; t < MAX_SIM_MS && s.phase != Phase::Over; t += 10) {
       d.advance(10);
       s = d.state();
     }
@@ -144,5 +174,6 @@ int main(int, char**) {
   RUN_TEST(test_same_seed_same_game);
   RUN_TEST(test_events_are_recorded);
   RUN_TEST(test_hundred_bot_games_finish);
+  RUN_TEST(test_bot_keeps_to_human_rules);
   return UNITY_END();
 }

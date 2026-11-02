@@ -574,6 +574,70 @@ void test_led_violation_blinks() {
   ASSERT_RGB(LED_BLUE, out[4 * 7 + 1]);
 }
 
+// The removal route avoids the target of a pending placement (and held origins): H(3,3) is
+// captured between M(3,2) and M arriving at (3,4) with H(2,3) above it; the only way out,
+// (4,3), is the target of a pending human placement, so the piece cannot be carried off.
+void test_removal_route_avoids_pending_target() {
+  for (int withPending = 0; withPending < 2; withPending++) {
+    Rules rules;
+    rules.humanIntervalMs = 5000;  // keep the placement pending through the capture
+    Game g(rules);
+    startPlay(g);
+    Params p;
+    VirtualGantry vg(p, 0.0f, 3.0f);
+    MachineController mc(g, vg, p);
+    teleport(g, mId(2), 3, 2);
+    teleport(g, hId(2), 3, 3);
+    teleport(g, hId(3), 2, 3);
+    teleport(g, mId(4), 2, 4);
+    teleport(g, hId(6), 4, 6);
+    uint32_t now = 3000;
+    g.onHumanLift(6, 0, now);
+    TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 0, now));
+    if (withPending) {
+      g.onHumanLift(4, 6, now);
+      TEST_ASSERT_EQUAL_INT((int)PlaceResult::Pending, (int)g.onHumanPlace(4, 3, now));
+    }
+    step(g, mc, now);
+    mc.takeSnapshot(now);
+    mc.onThinkResult(move(mId(4), 3, 4), now);
+    TEST_ASSERT_TRUE(mc.job().active);
+    while (g.phase() == Phase::Play && now < 20000) {
+      now += 5;
+      step(g, mc, now);
+    }
+    TEST_ASSERT_EQUAL_INT(1, g.captured(MACHINE));
+    while (g.phase() == Phase::Removing && now < 40000) {
+      now += 5;
+      step(g, mc, now);
+      // The route never touches the pending target.
+      if (withPending) TEST_ASSERT_FALSE(piece(g, hId(2)).r == 4 && piece(g, hId(2)).c == 3);
+    }
+    if (withPending) {
+      TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+      TEST_ASSERT_EQUAL_INT(hId(2), g.stuckId());
+      TEST_ASSERT_EQUAL_INT(hId(6), g.pendingId());
+    } else {
+      TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+    }
+  }
+}
+
+// A move job into or through a held piece's origin is refused, though the board shows it empty.
+void test_move_job_refused_into_held_origin() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  teleport(g, mId(0), 5, 1);
+  g.onHumanLift(6, 1, 3000);
+  step(g, mc, 3000);
+  mc.takeSnapshot(3000);
+  mc.onThinkResult(move(mId(0), 6, 1), 3000);
+  TEST_ASSERT_FALSE(mc.job().active);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_stage_durations_follow_params);
@@ -587,6 +651,8 @@ int main(int, char**) {
   RUN_TEST(test_dragged_piece_is_not_captured);
   RUN_TEST(test_no_route_pauses_then_manual_removal);
   RUN_TEST(test_virtual_gantry_drag_to_reserve_rows);
+  RUN_TEST(test_removal_route_avoids_pending_target);
+  RUN_TEST(test_move_job_refused_into_held_origin);
   RUN_TEST(test_led_held_destinations_are_blue);
   RUN_TEST(test_led_cooldown_red_proportional);
   RUN_TEST(test_led_job_destination_is_purple);

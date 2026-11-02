@@ -51,6 +51,8 @@ struct State {
   int saves;                           // pre-emption successes (5.5)
   int machineMoves;                    // move jobs started
   int stuckId;
+  // Held piece whose placement is pending and its target square (-1 when none).
+  int pendingId, pendingR, pendingC;
   SimEvent events[MAX_EVENTS];  // newest first
   int eventCount;
 };
@@ -90,6 +92,8 @@ class SimDriver {
   void resetMachine();
   void runBot();
   void noteCaptures(int8_t side, int r, int c);
+  // A human placement landed at (r,c): log captures and a pre-emption success.
+  void notePlaced(int id, int r, int c, int capsBefore);
   void pushEvent(EventKind kind, int8_t side, int count, int r, int c);
 
   Rules rules_;

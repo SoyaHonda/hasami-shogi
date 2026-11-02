@@ -38,7 +38,9 @@ struct BotAction {
 // holds it holdMs, then puts it on a capturing destination with probability greed (when there
 // is one) or on a random legal destination. Without a legal destination it puts the piece back
 // (cancel) or, when the origin is filled, on a random empty square (escape rule of 5.2).
-// The caller executes the action and reports the result back.
+// Keeps to the human rules of plan 2026-10-31 3.1: lifts only when no piece is held, holds for
+// less than the hold limit, and after a Pending placement waits until it lands (or is dropped,
+// then places again). The caller executes the action and reports the result back.
 class HumanBot {
  public:
   HumanBot(const BotParams& p = BotParams(), uint32_t seed = 1);
@@ -51,7 +53,7 @@ class HumanBot {
   BotAction decide(const Game& game);
   // Results of executing the action returned by decide().
   void onLifted(const Game& game, bool ok, int r, int c);
-  void onPlaced(const Game& game, bool ok);
+  void onPlaced(const Game& game, PlaceResult res);
 
  private:
   BotParams params_;

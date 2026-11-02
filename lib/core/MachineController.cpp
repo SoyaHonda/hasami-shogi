@@ -51,7 +51,8 @@ void MachineController::onThinkResult(const AiMove& m, uint32_t now) {
   if (m.pieceId < 1 || m.pieceId > game_.pieceCount()) return;
   const PieceView& p = game_.pieces()[m.pieceId - 1];
   if (!p.alive || p.held || p.side != MACHINE || game_.clockMs() < p.cooldownUntil) return;
-  const Board b = game_.boardWithReserve();
+  // Held origins and the pending target count as occupied (plan 2026-10-31 3.1).
+  const Board b = game_.boardForMachine();
   int d[MAX_N * MAX_N];
   const int k = dests(b, p.r, p.c, d);
   const int target = m.toR * b.n + m.toC;
@@ -156,15 +157,12 @@ void MachineController::startRemoval(uint32_t now) {
   if (k == 0) return;
   const Board b = game_.boardWithoutHeld();
   const int n = b.n;
-  // Squares the route must avoid: origins of held pieces (they may be put back) and the
-  // squares of the other captured pieces still on the board.
+  // Squares the route must avoid: origins of held pieces (they may be put back), the target of a
+  // pending placement (the piece is already there on the real board) and the squares of the
+  // other captured pieces still on the board.
   bool blocked[MAX_N * MAX_N];
   std::memset(blocked, 0, sizeof(blocked));
-  const int* held = game_.heldIds();
-  for (int i = 0; i < game_.heldCount(); i++) {
-    const PieceView& h = game_.pieces()[held[i] - 1];
-    blocked[h.r * n + h.c] = true;
-  }
+  for (int i = 0; i < n * n; i++) blocked[i] = game_.machineBlocked(i / n, i % n);
   for (int i = 0; i < k; i++) {
     bool block[MAX_N * MAX_N];
     std::memcpy(block, blocked, sizeof(block));

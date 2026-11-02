@@ -15,7 +15,8 @@ BotAction HumanBot::decide(const Game& game) {
   if (game.phase() != Phase::Play) return none;
   const uint32_t clock = game.clockMs();
   if (holding_) {
-    // The piece may have been released by something else (e.g. a new game).
+    // The piece may have left the hand without a placement of ours: a pending placement landed,
+    // the hold limit put it back, or something else released it (e.g. a new game).
     bool stillHeld = false;
     for (int i = 0; i < game.heldCount(); i++)
       if (game.heldIds()[i] == heldId_) stillHeld = true;
@@ -25,6 +26,10 @@ BotAction HumanBot::decide(const Game& game) {
       nextAt_ = clock + params_.reactMs;
       return none;
     }
+    // Pending: wait until it lands or is dropped.
+    if (game.pendingId() == heldId_) return none;
+  } else if (game.heldCount() > 0) {
+    return none;  // one piece in hand at a time
   } else if (!armed_) {
     armed_ = true;
     nextAt_ = clock + params_.reactMs;
@@ -92,11 +97,16 @@ void HumanBot::onLifted(const Game& game, bool ok, int r, int c) {
   heldId_ = game.heldIds()[game.heldCount() - 1];
   holding_ = true;
   failures_ = 0;
-  nextAt_ = game.clockMs() + params_.holdMs;
+  // Stay well inside the hold limit.
+  uint32_t hold = params_.holdMs;
+  const uint32_t limit = game.rules().maxHoldMs;
+  if (limit > 0 && hold >= limit) hold = limit / 2;
+  nextAt_ = game.clockMs() + hold;
 }
 
-void HumanBot::onPlaced(const Game& game, bool ok) {
-  if (!ok) {
+void HumanBot::onPlaced(const Game& game, PlaceResult res) {
+  if (res == PlaceResult::Pending) return;  // still held; decide() waits for it to land
+  if (res != PlaceResult::Ok && res != PlaceResult::Cancelled) {
     failures_++;  // retry next tick with the fallback
     return;
   }

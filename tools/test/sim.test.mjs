@@ -29,6 +29,7 @@ test('defaults() returns the C++ defaults', () => {
   assert.deepEqual(d.rules, {
     n: 7, target: 4, diffOn: false, diff: 2,
     humanCooldownMs: 3000, machineCooldownMs: 1000, countdownMs: 3000, resumeCountdownMs: 1000,
+    maxHeld: 1, humanIntervalMs: 1000, maxHoldMs: 1000, timeLimitMs: 600000,
   });
   assert.equal(d.params.freeSpeed, 4);
   assert.equal(d.params.dragSpeed, 1.5);
@@ -60,6 +61,7 @@ test('state() shape of a new 7x7 game', () => {
     assert.deepEqual(s.events, []);
     const p = s.pieces[0];
     for (const k of ['id', 'side', 'r', 'c', 'alive', 'held', 'cooldownLeft', 'x', 'y']) assert.ok(k in p, k);
+    assert.equal(s.pendingId, -1);
   });
 });
 
@@ -74,6 +76,7 @@ test('constructor and setRules take plain objects, missing fields use the defaul
     assert.equal(sim.state().n, 9);
   });
   assert.throws(() => new m.SimDriver({ nn: 5 }, {}, 1), /nn/);
+  assert.throws(() => new m.SimDriver({ maxHeld: 3 }, {}, 1), /maxHeld/);
 });
 
 test('lift and place return the C++ enums', () => {
@@ -94,19 +97,55 @@ test('lift and place return the C++ enums', () => {
   });
 });
 
-test('a bot game ends Over or at the 10 minute clock limit', () => {
-  const maxClock = 10 * 60 * 1000;
+test('a placement within the interval is Pending until it lands; one piece in hand', () => {
+  withSim([{}, {}, 1], (sim) => {
+    startPlay(sim);
+    assert.equal(sim.lift(6, 0), m.LiftResult.Ok);
+    assert.equal(sim.lift(6, 1), m.LiftResult.TooMany);
+    assert.equal(sim.place(5, 0), m.PlaceResult.Ok);
+    assert.equal(sim.lift(6, 1), m.LiftResult.Ok);
+    assert.equal(sim.place(4, 1), m.PlaceResult.Pending);
+    let s = sim.state();
+    assert.equal(s.pendingId, 4);
+    assert.equal(s.pendingR, 4);
+    assert.equal(s.pendingC, 1);
+    assert.equal(s.cells[4 * 7 + 1], 0);
+    for (let i = 0; i < 100; i++) sim.advance(10);
+    s = sim.state();
+    assert.equal(s.pendingId, -1);
+    assert.equal(s.cells[4 * 7 + 1], 1);
+  });
+});
+
+test('a held piece goes back after the hold limit', () => {
+  withSim([{}, {}, 1], (sim) => {
+    startPlay(sim);
+    assert.equal(sim.lift(6, 2), m.LiftResult.Ok);
+    for (let i = 0; i < 100; i++) sim.advance(10);
+    const s = sim.state();
+    assert.ok(!s.pieces.some((p) => p.held));
+    assert.equal(s.cells[6 * 7 + 2], 1);
+    assert.equal(s.pieces.find((p) => p.r === 6 && p.c === 2).cooldownLeft, 3000);
+  });
+});
+
+test('a bot game ends Over at the latest at the 10 minute time limit', () => {
+  const limit = m.defaults().rules.timeLimitMs;
   withSim([{}, {}, 3], (sim) => {
     sim.enableBot({});
     sim.start();
     let simMs = 0;
-    while (sim.phase() !== m.Phase.Over && sim.clockMs() < maxClock && simMs < 3 * maxClock) {
+    while (sim.phase() !== m.Phase.Over && simMs < 3 * limit) {
       sim.advance(10);
       simMs += 10;
     }
     const s = sim.state();
-    assert.ok(s.phase === m.Phase.Over || s.clockMs >= maxClock, `phase ${s.phase.value} clock ${s.clockMs}`);
-    if (s.phase === m.Phase.Over) assert.notEqual(s.winner, m.Winner.None);
+    assert.equal(s.phase, m.Phase.Over, `phase ${s.phase.value} clock ${s.clockMs}`);
+    assert.notEqual(s.winner, m.Winner.None);
+    if (s.winner === m.Winner.Draw) {
+      assert.equal(s.clockMs, limit);
+      assert.equal(s.capturedHuman, s.capturedMachine);
+    }
     assert.ok(s.machineMoves > 0);
   });
 });

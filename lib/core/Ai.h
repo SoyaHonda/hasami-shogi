@@ -22,6 +22,10 @@ struct Snapshot {
   float headR, headC;
   int heldIds[2];
   int heldCount;
+  // A held piece's placement waiting for the placement interval (plan 2026-10-31 3.1): its
+  // target square. The machine treats held origins and this square as occupied.
+  bool pending;
+  int pendingR, pendingC;
 };
 
 struct AiMove {

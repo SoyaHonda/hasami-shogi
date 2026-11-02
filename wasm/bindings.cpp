@@ -71,7 +71,8 @@ Rules rulesFrom(const val& o) {
   if (!present(o)) return r;
   readObject(o, "rules");
   checkKeys(o, "rules",
-            {"n", "target", "diffOn", "diff", "humanCooldownMs", "machineCooldownMs", "countdownMs", "resumeCountdownMs"});
+            {"n", "target", "diffOn", "diff", "humanCooldownMs", "machineCooldownMs", "countdownMs", "resumeCountdownMs",
+             "maxHeld", "humanIntervalMs", "maxHoldMs", "timeLimitMs"});
   take(o, "n", r.n);
   take(o, "target", r.target);
   take(o, "diffOn", r.diffOn);
@@ -80,7 +81,12 @@ Rules rulesFrom(const val& o) {
   take(o, "machineCooldownMs", r.machineCooldownMs);
   take(o, "countdownMs", r.countdownMs);
   take(o, "resumeCountdownMs", r.resumeCountdownMs);
+  take(o, "maxHeld", r.maxHeld);
+  take(o, "humanIntervalMs", r.humanIntervalMs);
+  take(o, "maxHoldMs", r.maxHoldMs);
+  take(o, "timeLimitMs", r.timeLimitMs);
   if (r.n < 3 || r.n > MAX_N) throwType("rules.n must be 3.." + std::to_string(MAX_N));
+  if (r.maxHeld < 1 || r.maxHeld > 2) throwType("rules.maxHeld must be 1..2");
   return r;
 }
 
@@ -120,6 +126,10 @@ val rulesToVal(const Rules& r) {
   o.set("machineCooldownMs", r.machineCooldownMs);
   o.set("countdownMs", r.countdownMs);
   o.set("resumeCountdownMs", r.resumeCountdownMs);
+  o.set("maxHeld", r.maxHeld);
+  o.set("humanIntervalMs", r.humanIntervalMs);
+  o.set("maxHoldMs", r.maxHoldMs);
+  o.set("timeLimitMs", r.timeLimitMs);
   return o;
 }
 
@@ -199,6 +209,9 @@ val stateToVal(const State& s) {
   o.set("saves", s.saves);
   o.set("machineMoves", s.machineMoves);
   o.set("stuckId", s.stuckId);
+  o.set("pendingId", s.pendingId);  // -1 when no placement is pending
+  o.set("pendingR", s.pendingR);
+  o.set("pendingC", s.pendingC);
   val events = val::array();
   for (int i = 0; i < s.eventCount; i++) {
     const SimEvent& e = s.events[i];
@@ -279,7 +292,8 @@ EMSCRIPTEN_BINDINGS(hasami) {
       .value("Cancelled", PlaceResult::Cancelled)
       .value("Illegal", PlaceResult::Illegal)
       .value("NoHeldPiece", PlaceResult::NoHeldPiece)
-      .value("NotPlaying", PlaceResult::NotPlaying);
+      .value("NotPlaying", PlaceResult::NotPlaying)
+      .value("Pending", PlaceResult::Pending);
   enum_<Phase>("Phase")
       .value("Ready", Phase::Ready)
       .value("Countdown", Phase::Countdown)
@@ -287,7 +301,11 @@ EMSCRIPTEN_BINDINGS(hasami) {
       .value("Paused", Phase::Paused)
       .value("Removing", Phase::Removing)
       .value("Over", Phase::Over);
-  enum_<Winner>("Winner").value("None", Winner::None).value("Human", Winner::Human).value("Machine", Winner::Machine);
+  enum_<Winner>("Winner")
+      .value("None", Winner::None)
+      .value("Human", Winner::Human)
+      .value("Machine", Winner::Machine)
+      .value("Draw", Winner::Draw);
   enum_<Level>("Level").value("Easy", Level::Easy).value("Normal", Level::Normal).value("Hard", Level::Hard);
   enum_<Stage>("Stage").value("Travel", Stage::Travel).value("Engage", Stage::Engage).value("Drag", Stage::Drag);
   enum_<EventKind>("EventKind").value("Capture", EventKind::Capture).value("Save", EventKind::Save);

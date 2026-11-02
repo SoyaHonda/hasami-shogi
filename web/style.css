@@ -76,6 +76,7 @@ h1{margin:0;font-family:var(--font-koma);font-weight:800;font-size:clamp(24px,4v
 .koma.held .shape{opacity:.22;transform:scale(.86)}
 .koma.held .edge{filter:none}
 .koma.dead .shape{opacity:.4}
+.koma.pending .shape{opacity:.5}
 .koma.dragging{z-index:3}
 .koma.dragging .shape{opacity:.92;transform:scale(1.08)}
 .koma.dragging .edge{filter:drop-shadow(0 1.5px 0 var(--e)) drop-shadow(0 10px 12px rgba(0,0,0,.28))}

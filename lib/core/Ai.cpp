@@ -198,13 +198,24 @@ AiMove think(const Snapshot& s, const Params& p) {
 
   const Board& b = s.board;
   AiMove best{true, -1, -1, -1, evalBoard(x, b)};
+  // Destinations: held pieces' origins and the pending target are occupied for the machine
+  // (plan 2026-10-31 3.1); the evaluation still sees them empty.
+  Board bm = b;
+  for (int i = 0; i < s.heldCount; i++) {
+    const int id = s.heldIds[i];
+    if (id < 1 || id > s.count) continue;
+    const PieceView& h = s.pieces[id - 1];
+    if (bm.inside(h.r, h.c) && bm.at(h.r, h.c) == EMPTY) bm.set(h.r, h.c, HUMAN);
+  }
+  if (s.pending && bm.inside(s.pendingR, s.pendingC) && bm.at(s.pendingR, s.pendingC) == EMPTY)
+    bm.set(s.pendingR, s.pendingC, HUMAN);
   const float engageS = static_cast<float>(p.engageMs) / 1000.0f;
 
   for (int i = 0; i < s.count; i++) {
     const PieceView& q = s.pieces[i];
     if (!q.alive || q.held || q.side != MACHINE || s.clockMs < q.cooldownUntil) continue;
     int d[MAX_N * MAX_N];
-    const int k = dests(b, q.r, q.c, d);
+    const int k = dests(bm, q.r, q.c, d);
     for (int j = 0; j < k; j++) {
       const int tr = d[j] / x.n, tc = d[j] % x.n;
       Board b2 = b;

@@ -75,7 +75,14 @@ void SimDriver::noteCaptures(int8_t side, int r, int c) {
 
 void SimDriver::advance(uint32_t dtMs) {
   now_ += dtMs;
+  // A pending placement may land in this tick.
+  const int pending = game_.pendingId();
+  const Sq pendingAt = game_.pendingCell();
+  const int capsBefore = game_.captured(HUMAN);
   game_.tick(now_);
+  if (pending >= 0 && !game_.pieces()[pending - 1].held && game_.pieces()[pending - 1].r == pendingAt.r &&
+      game_.pieces()[pending - 1].c == pendingAt.c)
+    notePlaced(pending, pendingAt.r, pendingAt.c, capsBefore);
   controller_.update(now_);
   gantry_.update(now_);
   {
@@ -112,7 +119,7 @@ void SimDriver::runBot() {
     bot_.onLifted(game_, res == LiftResult::Ok, a.r, a.c);
   } else if (a.kind == BotAction::Place) {
     const PlaceResult res = place(a.r, a.c);
-    bot_.onPlaced(game_, res == PlaceResult::Ok || res == PlaceResult::Cancelled);
+    bot_.onPlaced(game_, res);
   }
 }
 
@@ -142,7 +149,7 @@ PlaceResult SimDriver::place(int r, int c) {
   for (int i = 0; i < nBefore; i++) heldBefore[i] = game_.heldIds()[i];
   const int capsBefore = game_.captured(HUMAN);
   const PlaceResult res = game_.onHumanPlace(r, c, now_);
-  if (res != PlaceResult::Ok && res != PlaceResult::Cancelled) return res;
+  if (res != PlaceResult::Ok && res != PlaceResult::Cancelled) return res;  // Pending: lands in advance()
   // Which piece left the hand?
   int placed = -1;
   for (int i = 0; i < nBefore; i++) {
@@ -152,14 +159,20 @@ PlaceResult SimDriver::place(int r, int c) {
     if (!still) placed = heldBefore[i];
   }
   if (res == PlaceResult::Ok) {
-    noteCaptures(HUMAN, r, c);
-    if (placed > 0 && lift_[placed].threat && lift_[placed].responded && game_.captured(HUMAN) == capsBefore) {
-      saves_++;
-      pushEvent(EventKind::Save, HUMAN, 0, r, c);
-    }
+    notePlaced(placed, r, c, capsBefore);
+  } else if (placed > 0) {
+    lift_[placed] = LiftInfo{false, false};
   }
-  if (placed > 0) lift_[placed] = LiftInfo{false, false};
   return res;
+}
+
+void SimDriver::notePlaced(int id, int r, int c, int capsBefore) {
+  noteCaptures(HUMAN, r, c);
+  if (id > 0 && lift_[id].threat && lift_[id].responded && game_.captured(HUMAN) == capsBefore) {
+    saves_++;
+    pushEvent(EventKind::Save, HUMAN, 0, r, c);
+  }
+  if (id > 0) lift_[id] = LiftInfo{false, false};
 }
 
 State SimDriver::state() const {
@@ -200,6 +213,9 @@ State SimDriver::state() const {
   s.saves = saves_;
   s.machineMoves = machineMoves_;
   s.stuckId = game_.stuckId();
+  s.pendingId = game_.pendingId();
+  s.pendingR = game_.pendingCell().r;
+  s.pendingC = game_.pendingCell().c;
   s.eventCount = eventCount_;
   for (int i = 0; i < eventCount_; i++) {
     const int idx = (eventHead_ - 1 - i + 2 * MAX_EVENTS) % MAX_EVENTS;

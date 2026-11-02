@@ -3,7 +3,8 @@
 
 enum Cell : int8_t { EMPTY = 0, HUMAN = 1, MACHINE = 2 };
 enum class Phase { Ready, Countdown, Play, Paused, Removing, Over };
-enum class Winner { None, Human, Machine };
+// Draw: the time limit ran out with equal captures.
+enum class Winner { None, Human, Machine, Draw };
 enum class Level { Easy, Normal, Hard };
 enum class MagnetMode { Off, PullMachine, PullHuman, RepelWeak };
 constexpr int MAX_N = 9;

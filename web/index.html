@@ -79,6 +79,16 @@
         <label for="mCd">機械のクールダウン（駒ごと）</label><output id="mCdOut">1.0 秒</output>
         <input type="range" id="mCd" min="0" max="6" step="0.5" value="1">
       </div>
+      <div class="row">
+        <label for="hGap">置く間隔（あなたの置きと置きのあいだ）</label><output id="hGapOut">1.0 秒</output>
+        <input type="range" id="hGap" min="0" max="2" step="0.1" value="1">
+        <span class="hint">早く置いた駒は、間隔が過ぎた時点で置いたことになります（それまで半透明で表示）。</span>
+      </div>
+      <div class="row">
+        <label for="hHold">持ち上げの上限</label><output id="hHoldOut">1.0 秒</output>
+        <input type="range" id="hHold" min="0.5" max="5" step="0.5" value="1">
+        <span class="hint">これを過ぎても置かないと、駒は元のマスに戻ってクールダウンが付きます。持ち上げられるのは1枚だけです。</span>
+      </div>
     </section>
 
     <section class="box" aria-label="機械の設定">

@@ -403,7 +403,9 @@ void handleEvents(uint32_t now) {
         if (game.onHumanLift(e.r, e.c, now) == LiftResult::Ok) controller.onHumanLift(now);
         break;
       case WatchEvent::Place:
-        game.onHumanPlace(e.r, e.c, now);
+        // The watcher reports a placement PLACE_MS after it first saw the piece; the placement
+        // interval and the hold limit are judged at that first sighting.
+        game.onHumanPlace(e.r, e.c, now, now - BoardWatcher::PLACE_MS);
         break;
       case WatchEvent::MachineTouch: {
         const Phase ph = game.phase();

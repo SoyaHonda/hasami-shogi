@@ -59,6 +59,8 @@ function cellFromEvent(e) {
   return [rr, c];
 }
 const heldPiece = () => S.pieces.find((p) => p.held && p.side === HUMAN) || null;
+// The held piece whose placement waits for the placement interval (shown on its target square).
+const isPending = (p) => p && p.held && p.id === S.pendingId;
 
 // Drag and drop: pressing a piece lifts it; releasing on another square places it there, releasing
 // off the board or on a square it cannot go to puts it back (a cancel). Releasing on the same square
@@ -87,6 +89,7 @@ function drop(e, cancelled) {
   if (!moved || !h || h.id !== id) return;
   const cell = cancelled ? null : cellFromEvent(e);
   const res = cell ? sim.place(cell[0], cell[1]) : null;
+  // Pending stays as it is: the piece lands once the placement interval has passed.
   if (!res || is(res, PlaceResult.Illegal)) sim.place(h.r, h.c);
   S = sim.state();
 }
@@ -99,6 +102,12 @@ boardEl.addEventListener('pointerdown', (e) => {
   if (!cell) return;
   const [r, c] = cell;
   const h = heldPiece();
+  if (isPending(h) && r === S.pendingR && c === S.pendingC) {
+    // Pressing a pending piece on its target picks it up again: drag it elsewhere (replaces the
+    // target) or onto its origin (cancels); releasing without moving keeps it pending.
+    startDrag(e, h, r, c);
+    return;
+  }
   if (!h) {
     sim.lift(r, c);
   } else {
@@ -114,14 +123,15 @@ boardEl.addEventListener('pointerdown', (e) => {
   S = sim.state();
   // Whatever got lifted under the pointer can be dragged from here.
   const now = heldPiece();
-  if (now && now.r === r && now.c === c) {
-    drag = { id: now.id, pointerId: e.pointerId, r, c, moved: false, x: c, y: r };
-    [drag.x, drag.y] = dragPos(e);
-    boardEl.setPointerCapture(e.pointerId);
-    boardEl.classList.add('dragging');
-    e.preventDefault();
-  }
+  if (now && now.r === r && now.c === c) startDrag(e, now, r, c);
 });
+function startDrag(e, piece, r, c) {
+  drag = { id: piece.id, pointerId: e.pointerId, r, c, moved: false, x: c, y: r };
+  [drag.x, drag.y] = dragPos(e);
+  boardEl.setPointerCapture(e.pointerId);
+  boardEl.classList.add('dragging');
+  e.preventDefault();
+}
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const h = heldPiece();
@@ -233,7 +243,8 @@ function ledLook(v) {
 }
 
 function render() {
-  // The game may drop the held piece mid-drag (Esc, reset, phase change).
+  // The game may drop the held piece mid-drag (Esc, reset, phase change, or the hold limit
+  // putting it back on its square): the drag ends with it.
   if (drag) {
     const h = heldPiece();
     if (!h || h.id !== drag.id) endDrag();
@@ -289,10 +300,13 @@ function render() {
       k.classList.add('dead');
     }
     const dragging = drag !== null && drag.moved && p.id === drag.id && p.held;
-    const x = dragging ? drag.x : p.x, y = dragging ? drag.y : p.y;
+    // A pending placement shows the piece half-transparent on its target square.
+    const pending = !dragging && isPending(p);
+    const x = dragging ? drag.x : pending ? S.pendingC : p.x, y = dragging ? drag.y : pending ? S.pendingR : p.y;
     k.style.transform = `translate(${x * 100}%,${y * 100}%)`;
     k.classList.toggle('dragging', dragging);
-    k.classList.toggle('held', p.held);
+    k.classList.toggle('pending', pending);
+    k.classList.toggle('held', p.held && !pending);
     k.classList.toggle('cool', p.alive && p.id !== jobPiece && p.cooldownLeft > 0 && !p.held);
   }
   headEl.style.transform = `translate(${S.headC * 100}%,${S.headR * 100}%)`;
@@ -311,14 +325,20 @@ function fmt(ms) {
   const s = ms / 1000;
   return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`;
 }
+function winnerText() {
+  if (is(S.winner, Winner.Human)) return 'あなたの勝ち';
+  if (is(S.winner, Winner.Draw)) return '引き分け';
+  return '機械の勝ち';
+}
 function statusText() {
   const ph = S.phase;
   if (is(ph, Phase.Ready)) return '「対局開始」を押すと3秒後に始まります。';
   if (is(ph, Phase.Countdown)) return 'まもなく開始します。';
   if (is(ph, Phase.Paused)) return '一時停止中です。';
   if (is(ph, Phase.Removing)) return '駒が取られたので、機械が盤外へ運び出しています。';
-  if (is(ph, Phase.Over)) return is(S.winner, Winner.Human) ? 'あなたの勝ちです。' : '機械の勝ちです。';
+  if (is(ph, Phase.Over)) return `${winnerText()}です。`;
   const h = heldPiece();
+  if (isPending(h)) return `${sq(S.pendingR, S.pendingC)}に置きました。前の置きから${(activeRules.humanIntervalMs / 1000).toFixed(1)}秒たつと確定します。`;
   if (h) return `${sq(h.r, h.c)}の歩を持ち上げています。置くマスで離すかクリック、元のマスで取り消し。`;
   return '自分の歩をドラッグして動かします（クリックでも可）。';
 }
@@ -396,7 +416,7 @@ function showOverlay(kind, n) {
   if (kind === 'removing') overlayEl.innerHTML = `<div class="card"><div class="big">回収中</div><p>${n}枚を盤外へ運び出しています</p></div>`;
   if (kind === 'paused') overlayEl.innerHTML = `<div class="card"><div class="big">一時停止</div><button class="btn" id="ovResume">再開</button></div>`;
   if (kind === 'over')
-    overlayEl.innerHTML = `<div class="card"><div class="big">${is(S.winner, Winner.Human) ? 'あなたの勝ち' : '機械の勝ち'}</div><p>${S.capturedHuman} 対 ${S.capturedMachine}・${fmt(S.clockMs)}・先回り成功 ${S.saves}回</p><button class="btn" id="ovAgain">もう一局</button></div>`;
+    overlayEl.innerHTML = `<div class="card"><div class="big">${winnerText()}</div><p>${S.capturedHuman} 対 ${S.capturedMachine}・${fmt(S.clockMs)}・先回り成功 ${S.saves}回</p><button class="btn" id="ovAgain">もう一局</button></div>`;
   const s = $('ovStart');
   if (s) s.onclick = start;
   const rs = $('ovResume');
@@ -467,6 +487,8 @@ function bindRange(id, get, set, fmtF) {
 const applyParams = () => sim.setParams(params);
 bindRange('hCd', () => rules.humanCooldownMs / 1000, (v) => { rules.humanCooldownMs = Math.round(v * 1000); applyRules(false); }, (v) => v.toFixed(1) + ' 秒');
 bindRange('mCd', () => rules.machineCooldownMs / 1000, (v) => { rules.machineCooldownMs = Math.round(v * 1000); applyRules(false); }, (v) => v.toFixed(1) + ' 秒');
+bindRange('hGap', () => rules.humanIntervalMs / 1000, (v) => { rules.humanIntervalMs = Math.round(v * 1000); applyRules(false); }, (v) => v.toFixed(1) + ' 秒');
+bindRange('hHold', () => rules.maxHoldMs / 1000, (v) => { rules.maxHoldMs = Math.round(v * 1000); applyRules(false); }, (v) => v.toFixed(1) + ' 秒');
 const mm = (v) => `${+v.toFixed(2)} マス/秒（${Math.round(v * 30)} mm/s）`;
 bindRange('speed', () => params.dragSpeed, (v) => { params.dragSpeed = v; applyParams(); }, mm);
 bindRange('free', () => params.freeSpeed, (v) => { params.freeSpeed = v; applyParams(); }, mm);
