@@ -58,14 +58,28 @@ bool isAiCaseSkippable(const char* line) {
 
 bool parseAiCase(const char* line, AiCase& out) {
   if (isAiCaseSkippable(line)) return false;
-  char f[6][128];
+  // Up to 8 fields: board held head cooldowns [gap lift] params expect.
+  char raw[8][128];
+  int nf = 0;
   const char* p = line;
-  for (int i = 0; i < 6; i++) {
-    p = nextField(p, f[i], sizeof(f[i]));
-    if (!p) return false;
+  for (;;) {
+    char buf[128];
+    const char* q = nextField(p, buf, sizeof(buf));
+    if (!q) {
+      // End of line, or a field too long (nextField stops on both).
+      while (*p == ' ' || *p == '\t') p++;
+      if (*p && *p != '\n' && *p != '\r') return false;
+      break;
+    }
+    if (nf >= 8) return false;
+    std::memcpy(raw[nf++], buf, sizeof(buf));
+    p = q;
   }
-  char extra[8];
-  if (nextField(p, extra, sizeof(extra))) return false;
+  if (nf != 6 && nf != 8) return false;
+  // f[0..3] board held head cooldowns, f[4] params, f[5] expect; gap and lift ('-' when absent).
+  const char* f[6] = {raw[0], raw[1], raw[2], raw[3], raw[nf - 2], raw[nf - 1]};
+  const char* gapField = nf == 8 ? raw[4] : "-";
+  const char* liftField = nf == 8 ? raw[5] : "-";
 
   out = AiCase{};
   Snapshot& s = out.snap;
@@ -79,12 +93,16 @@ bool parseAiCase(const char* line, AiCase& out) {
 
   // Held origins.
   bool heldAt[MAX_N * MAX_N] = {};
+  int heldSq[2];
+  int heldN = 0;
   if (std::strcmp(f[1], "-") != 0) {
     const char* q = f[1];
     for (;;) {
       int r, c;
       if (!parseSquare(q, r, c) || !s.board.inside(r, c) || f[0][r * n + c] != '.') return false;
+      if (heldAt[r * n + c] || heldN >= 2) return false;
       heldAt[r * n + c] = true;
+      heldSq[heldN++] = r * n + c;
       if (*q == '\0') break;
       if (!expect(q, ';')) return false;
     }
@@ -123,6 +141,30 @@ bool parseAiCase(const char* line, AiCase& out) {
       s.board.cells[i] = pv.side;
     }
     s.count++;
+  }
+  if (std::strcmp(gapField, "-") != 0) {
+    const char* q = gapField;
+    long gap;
+    if (!parseInt(q, gap) || *q || gap < 0 || gap > static_cast<long>(s.humanIntervalMs)) return false;
+    s.hasLastPlace = true;
+    s.lastPlaceAt = s.clockMs + static_cast<uint32_t>(gap) - s.humanIntervalMs;
+  }
+  for (int i = 0; i < s.heldCount; i++) s.pieces[s.heldIds[i] - 1].liftedAt = s.clockMs;
+  if (std::strcmp(liftField, "-") != 0) {
+    const char* q = liftField;
+    for (int i = 0;; i++) {
+      long ms;
+      if (i >= heldN || !parseInt(q, ms) || ms < 0 || ms > static_cast<long>(s.clockMs)) return false;
+      for (int j = 0; j < s.count; j++) {
+        PieceView& pv = s.pieces[j];
+        if (pv.held && pv.r * n + pv.c == heldSq[i]) pv.liftedAt = s.clockMs - static_cast<uint32_t>(ms);
+      }
+      if (*q == '\0') {
+        if (i + 1 != heldN) return false;
+        break;
+      }
+      if (!expect(q, ';')) return false;
+    }
   }
   {
     const char* q = f[2];

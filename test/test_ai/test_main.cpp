@@ -4,6 +4,7 @@
 #include "Ai.h"
 #include "AiCase.h"
 #include "Board.h"
+#include "Game.h"
 
 // Build a snapshot from rows separated by '\n': '.' empty, 'H' human, 'M' machine,
 // 'h' a held human piece (its origin square is empty on the board). Pieces get ids 1.. in
@@ -278,6 +279,78 @@ void test_ai_case_parser() {
   TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - 3,1.5,100,250,X,0.25,0 none", c));   // level
   TEST_ASSERT_FALSE(parseAiCase("M...H.... 1,1 0,0 - 3,1.5,100,250,H,0.25,0 none", c)); // held on a piece
   TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - 3,1.5,100,250,H,0.25,0", c));        // missing field
+  // A six-field line reads gap and lift as '-': no placement yet, held pieces just lifted.
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... 2,1 0.5,1.25 - 3,1.5,100,250,H,0.25,0 none", c));
+  TEST_ASSERT_FALSE(c.snap.hasLastPlace);
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS, c.snap.pieces[2].liftedAt);
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... 2,1 0.5,1.25 - - - 3,1.5,100,250,H,0.25,0 none", c));
+  TEST_ASSERT_FALSE(c.snap.hasLastPlace);
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS, c.snap.pieces[2].liftedAt);
+  // gap 400: the last placement was 600 ms ago; lift 250 ms ago.
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... 2,1 0.5,1.25 - 400 250 3,1.5,100,250,H,0.25,0 none", c));
+  TEST_ASSERT_TRUE(c.snap.hasLastPlace);
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS - 600, c.snap.lastPlaceAt);
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS - 250, c.snap.pieces[2].liftedAt);
+  TEST_ASSERT_EQUAL_UINT32(0, c.snap.pieces[0].liftedAt);
+  // Lift times follow the order of the held field.
+  TEST_ASSERT_TRUE(parseAiCase("M........ 2,1;1,2 0,0 - 0 100;700 3,1.5,100,250,H,0.25,0 none", c));
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS - 700, c.snap.pieces[1].liftedAt);  // (1,2), id 2
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS - 100, c.snap.pieces[2].liftedAt);  // (2,1), id 3
+  TEST_ASSERT_EQUAL_UINT32(AI_CASE_CLOCK_MS - 1000, c.snap.lastPlaceAt);
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... 2,1 0,0 - 1001 - 3,1.5,100,250,H,0.25,0 none", c));  // gap > interval
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... 2,1 0,0 - - 1;2 3,1.5,100,250,H,0.25,0 none", c));   // one held
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - - 5 3,1.5,100,250,H,0.25,0 none", c));       // none held
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - - 3,1.5,100,250,H,0.25,0 none", c));         // 7 fields
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - - - x 3,1.5,100,250,H,0.25,0 none", c));     // 9 fields
+}
+
+// Game::snapshot carries what RaceTime needs (plan 2026-10-31 3.3): lift time, last placement,
+// the pending piece, the reserved square and the rule times.
+void test_snapshot_fields() {
+  Rules rules;
+  rules.humanCooldownMs = 2500;
+  rules.machineCooldownMs = 900;
+  rules.humanIntervalMs = 1100;
+  rules.maxHoldMs = 1200;
+  Game g(rules);
+  g.start(0);
+  g.tick(3000);  // countdown over: Play at caller time 3000, game clock 0
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  const int n = g.rules().n;
+  Snapshot s = g.snapshot(0.0f, 0.0f);
+  TEST_ASSERT_FALSE(s.hasLastPlace);
+  TEST_ASSERT_EQUAL_INT(-1, s.pendingId);
+  TEST_ASSERT_EQUAL_INT(-1, s.reservedR);
+  TEST_ASSERT_EQUAL_UINT32(2500, s.humanCooldownMs);
+  TEST_ASSERT_EQUAL_UINT32(900, s.machineCooldownMs);
+  TEST_ASSERT_EQUAL_UINT32(1100, s.humanIntervalMs);
+  TEST_ASSERT_EQUAL_UINT32(1200, s.maxHoldMs);
+  // Lift (6,0) at clock 100, put it on (5,0) at 300.
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(n - 1, 0, 3100));
+  s = g.snapshot(0.0f, 0.0f);
+  const int id0 = s.heldIds[0];
+  TEST_ASSERT_TRUE(s.pieces[id0 - 1].held);
+  TEST_ASSERT_EQUAL_UINT32(100, s.pieces[id0 - 1].liftedAt);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(n - 2, 0, 3300));
+  s = g.snapshot(0.0f, 0.0f);
+  TEST_ASSERT_TRUE(s.hasLastPlace);
+  TEST_ASSERT_EQUAL_UINT32(300, s.lastPlaceAt);
+  // A second piece lifted and put down too early: pending.
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(n - 1, 1, 3400));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Pending, (int)g.onHumanPlace(n - 2, 1, 3500));
+  s = g.snapshot(0.0f, 0.0f);
+  TEST_ASSERT_TRUE(s.pending);
+  TEST_ASSERT_EQUAL_INT(s.heldIds[0], s.pendingId);
+  TEST_ASSERT_EQUAL_INT(n - 2, s.pendingR);
+  TEST_ASSERT_EQUAL_INT(1, s.pendingC);
+  // A machine reservation shows up.
+  int mid = -1;
+  for (int i = 0; i < g.pieceCount(); i++)
+    if (g.pieces()[i].side == MACHINE && g.pieces()[i].c == 3) mid = g.pieces()[i].id;
+  TEST_ASSERT_TRUE(g.machineCanEnter(mid, 1, 3));
+  s = g.snapshot(0.0f, 0.0f);
+  TEST_ASSERT_EQUAL_INT(1, s.reservedR);
+  TEST_ASSERT_EQUAL_INT(3, s.reservedC);
 }
 
 void test_golden_cases() {
@@ -320,6 +393,7 @@ int main(int, char**) {
   RUN_TEST(test_hard_leaves_after_flank_steps_away);
   RUN_TEST(test_hard_leaves_sandwich_with_refill);
   RUN_TEST(test_ai_case_parser);
+  RUN_TEST(test_snapshot_fields);
   RUN_TEST(test_golden_cases);
   return UNITY_END();
 }

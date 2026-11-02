@@ -29,7 +29,6 @@ void Game::reset() {
   if (rules_.maxHeld > 2) rules_.maxHeld = 2;
   held_[0] = held_[1] = -1;
   heldCount_ = 0;
-  std::memset(liftClock_, 0, sizeof(liftClock_));
   hasLastPlace_ = false;
   lastPlaceClock_ = 0;
   pendingId_ = -1;
@@ -121,7 +120,7 @@ void Game::runTimers(uint32_t now) {
           land(*p, r, c, due);
         } else {
           reportViolation(r, c, now);
-          if (rules_.maxHoldMs > 0 && due >= liftClock_[p->id] + rules_.maxHoldMs) expireHold(*p, due, now);
+          if (rules_.maxHoldMs > 0 && due >= p->liftedAt + rules_.maxHoldMs) expireHold(*p, due, now);
         }
       }
     }
@@ -132,7 +131,7 @@ void Game::runTimers(uint32_t now) {
     for (int i = heldCount_ - 1; i >= 0; i--) {
       PieceView* p = byId(held_[i]);
       if (!p || p->id == pendingId_) continue;
-      const uint32_t until = liftClock_[p->id] + rules_.maxHoldMs;
+      const uint32_t until = p->liftedAt + rules_.maxHoldMs;
       if (clock_ >= until) expireHold(*p, until, now);
     }
   }
@@ -248,7 +247,7 @@ LiftResult Game::onHumanLift(int r, int c, uint32_t now) {
   }
   p->held = true;
   held_[heldCount_++] = p->id;
-  liftClock_[p->id] = clock_;
+  p->liftedAt = clock_;
   return LiftResult::Ok;
 }
 
@@ -313,8 +312,8 @@ PlaceResult Game::onHumanPlace(int r, int c, uint32_t now, uint32_t placedAt) {
     return PlaceResult::Illegal;
   }
   // Hold limit, judged at the time the piece was put down (a pending piece does not time out).
-  if (chosen->id != pendingId_ && rules_.maxHoldMs > 0 && at >= liftClock_[chosen->id] + rules_.maxHoldMs) {
-    expireHold(*chosen, liftClock_[chosen->id] + rules_.maxHoldMs, now);
+  if (chosen->id != pendingId_ && rules_.maxHoldMs > 0 && at >= chosen->liftedAt + rules_.maxHoldMs) {
+    expireHold(*chosen, chosen->liftedAt + rules_.maxHoldMs, now);
     return PlaceResult::Illegal;
   }
   // Placement interval: too early -> pending until the interval has passed (tick lands it).
@@ -526,5 +525,14 @@ Snapshot Game::snapshot(float headR, float headC) const {
   s.pending = pendingId_ >= 0;
   s.pendingR = pendingR_;
   s.pendingC = pendingC_;
+  s.pendingId = pendingId_;
+  s.hasLastPlace = hasLastPlace_;
+  s.lastPlaceAt = lastPlaceClock_;
+  s.reservedR = reservedBy_ >= 0 ? reservedR_ : -1;
+  s.reservedC = reservedBy_ >= 0 ? reservedC_ : -1;
+  s.humanCooldownMs = rules_.humanCooldownMs;
+  s.machineCooldownMs = rules_.machineCooldownMs;
+  s.humanIntervalMs = rules_.humanIntervalMs;
+  s.maxHoldMs = rules_.maxHoldMs;
   return s;
 }

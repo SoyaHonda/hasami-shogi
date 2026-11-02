@@ -158,7 +158,6 @@ class Game {
   int count_;
   int held_[2];
   int heldCount_;
-  uint32_t liftClock_[2 * MAX_N + 1];  // game clock of each held piece's lift
   bool hasLastPlace_;
   uint32_t lastPlaceClock_;  // game clock of the latest placement that landed
   int pendingId_;

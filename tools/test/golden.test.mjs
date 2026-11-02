@@ -15,6 +15,13 @@ before(async () => {
 test('thinkCase rejects malformed lines', () => {
   assert.equal(m.thinkCase('M...H.... - 0,0 - 3,1.5,100,250,H,0.25,0').parsed, false);
   assert.equal(m.thinkCase('# comment').parsed, false);
+  assert.equal(m.thinkCase('M...H.... - 0,0 - - 3,1.5,100,250,H,0.25,0 none').parsed, false); // 7 fields
+});
+
+test('thinkCase reads the optional gap and lift fields', () => {
+  assert.equal(m.thinkCase('M...H.... 2,1 0.5,1.25 - 400 250 3,1.5,100,250,H,0.25,0 none').parsed, true);
+  assert.equal(m.thinkCase('M...H.... 2,1 0.5,1.25 - - - 3,1.5,100,250,H,0.25,0 none').parsed, true);
+  assert.equal(m.thinkCase('M...H.... 2,1 0,0 - 1001 - 3,1.5,100,250,H,0.25,0 none').parsed, false);
 });
 
 test('WASM matches every line of test/golden/ai_cases.txt', () => {

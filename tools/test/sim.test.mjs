@@ -38,6 +38,10 @@ test('defaults() returns the C++ defaults', () => {
   assert.equal(d.params.level, m.Level.Normal);
   assert.equal(d.params.aggression, 0.5);
   assert.equal(d.params.readLift, true);
+  assert.equal(d.params.humanMoveMs, 500);
+  assert.equal(d.params.humanLiftMs, 150);
+  assert.equal(d.params.humanPlaceMs, 350);
+  assert.equal(d.params.humanReactMs, 300);
   assert.deepEqual(d.bot, { reactMs: 400, holdMs: 600, greed: 0.8 });
 });
 

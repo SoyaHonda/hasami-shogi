@@ -1,6 +1,7 @@
 // Generates src/golden_cases.h from test/golden/ai_cases.txt for the ESP32 `golden` serial
 // command (src/main.cpp). The header is not in git: run this before `pio run -e esp32dev`
-// (CI does).
+// (CI does). Lines are embedded as they are; parseAiCase on the device reads both formats (with
+// and without the gap and lift fields, lib/core/AiCase.h).
 //   node tools/gen-golden.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 

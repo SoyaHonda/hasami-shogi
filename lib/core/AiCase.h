@@ -7,16 +7,22 @@
 // build is checked to pick the same move.
 //
 // Line format (fields separated by spaces; empty lines and lines starting with '#' are skipped):
-//   board held head cooldowns params expect
+//   board held head cooldowns [gap lift] params expect
 //   board     n*n characters '.', 'H', 'M' in row-major order (n = 3..MAX_N)
 //   held      '-' or origins of held human pieces "r,c" joined by ';' (empty on the board)
 //   head      "r,c" head position (floats)
 //   cooldowns '-' or "r,c=ms" joined by ';': remaining cooldown of the piece at that square
+//   gap       '-' (no placement yet) or "ms": placement interval left (0..humanIntervalMs); the
+//             last placement was at clock + ms - humanIntervalMs
+//   lift      '-' (just lifted) or "ms" joined by ';' in the order of `held`: time since each
+//             held piece was lifted
 //   params    "freeSpeed,dragSpeed,engageMs,reactMs,level,aggression,readLift" with level E/N/H
 //             and readLift 0/1
 //   expect    "none" or "r,c>r,c" (from square > to square)
-// Piece ids are given in row-major order over the squares with a piece or a held origin. The
-// snapshot clock is AI_CASE_CLOCK_MS; cooldownUntil = clock + remaining.
+// gap and lift are optional together: a line with six fields (the older format) reads both as
+// '-'. Piece ids are given in row-major order over the squares with a piece or a held origin. The
+// snapshot clock is AI_CASE_CLOCK_MS; cooldownUntil = clock + remaining. Rule times are the
+// Snapshot defaults (those of Rules).
 constexpr uint32_t AI_CASE_CLOCK_MS = 100000;
 
 struct AiCase {

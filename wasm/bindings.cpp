@@ -94,7 +94,8 @@ Params paramsFrom(const val& o) {
   Params p;
   if (!present(o)) return p;
   readObject(o, "params");
-  checkKeys(o, "params", {"freeSpeed", "dragSpeed", "engageMs", "reactMs", "level", "aggression", "readLift"});
+  checkKeys(o, "params", {"freeSpeed", "dragSpeed", "engageMs", "reactMs", "level", "aggression", "readLift",
+                          "humanMoveMs", "humanLiftMs", "humanPlaceMs", "humanReactMs"});
   take(o, "freeSpeed", p.freeSpeed);
   take(o, "dragSpeed", p.dragSpeed);
   take(o, "engageMs", p.engageMs);
@@ -102,6 +103,10 @@ Params paramsFrom(const val& o) {
   if (present(o["level"])) p.level = levelFrom(o["level"]);
   take(o, "aggression", p.aggression);
   take(o, "readLift", p.readLift);
+  take(o, "humanMoveMs", p.humanMoveMs);
+  take(o, "humanLiftMs", p.humanLiftMs);
+  take(o, "humanPlaceMs", p.humanPlaceMs);
+  take(o, "humanReactMs", p.humanReactMs);
   return p;
 }
 
@@ -142,6 +147,10 @@ val paramsToVal(const Params& p) {
   o.set("level", p.level);
   o.set("aggression", shortest(p.aggression));
   o.set("readLift", p.readLift);
+  o.set("humanMoveMs", p.humanMoveMs);
+  o.set("humanLiftMs", p.humanLiftMs);
+  o.set("humanPlaceMs", p.humanPlaceMs);
+  o.set("humanReactMs", p.humanReactMs);
   return o;
 }
 
