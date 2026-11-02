@@ -1,6 +1,6 @@
 # ソフトウェア計画: 人間側のルールの釣り合いと、機械の読みの作り直し
 
-2026-10-31（同日、専門家レビュー2回を受けて改訂）/ 対象: 人間の操作に関するルール（持ち上げは1枚、置く間隔、持ち上げの上限）、実機で盤とゲームの認識がずれたときの一時停止、`lib/core` の機械の読み（`Ai`）、読みを測る人間役ボットと自動対戦。`plans/2026-10-30_core-wasm-firmware.md` の3章のルールと「機械の読み」、5.3、5.5、5.8 のうち該当する記述はこの計画で置き換える。運び出し、LED の色規則、ファームの構成は変えない（ファームは一時停止の扱いだけ足す）。
+2026-10-31（専門家レビュー3回を受けて 2026-11-02 に改訂）/ 対象: 人間の操作に関するルール（持ち上げは1枚、置く間隔、持ち上げの上限）、実機で盤とゲームの認識がずれたときの一時停止、`lib/core` の機械の読み（`Ai`）、読みを測る人間役ボットと自動対戦。`plans/2026-10-30_core-wasm-firmware.md` の3章のルールと「機械の読み」、5.3、5.5、5.8 のうち該当する記述はこの計画で置き換える。運び出し、LED の色規則、ファームの構成は変えない（ファームは一時停止の扱いだけ足す）。
 
 ## 1. 背景
 
@@ -31,14 +31,20 @@
 
 - `Rules::maxHeld = 1`。持ち上げ中の駒があるときの持ち上げは `TooMany`（反則）。
 - `Rules::humanIntervalMs = 1000`。人間が駒を置いて成立した時刻（`lastPlaceAt`、ゲーム時計）から1秒たたないうちの置きは、`PlaceResult::Pending` を返して保留にする。保留中の駒は持ち上げ中のまま扱い（盤上になく、はさまれない）、`tick` で間隔が過ぎた時点に、その時点の盤で合法なら置きを成立させる（クールダウン、はさみ判定）。合法でなくなっていれば保留を捨て、反則を記録する（駒は持ち上げ中のまま）。保留中に同じ駒を元のマスへ置けば取り消し、別のマスへ置けば保留先を置き換える。取り消し（元のマスへ戻す）は置きとして数えない。
-- `Rules::maxHoldMs = 1000`。持ち上げてから（ゲーム時計で、Play 中だけ数える）1秒を過ぎても置きが成立も保留もしていなければ、駒を元のマスへ戻したものとして扱い、人間のクールダウンを付け、元のマスで反則を記録する。元のマスが埋まっているとき（機械が入ったなど）は、持ち上げたまま反則を記録し、`stuckHeld` を立てて一時停止する（3.2）。保留中の駒は時間切れにしない。
+- `Rules::maxHoldMs = 1000`。持ち上げてから（ゲーム時計で、Play 中だけ数える）1秒を過ぎても置きが成立も保留もしていなければ、駒を元のマスへ戻したものとして扱い、人間のクールダウンを付け、元のマスで反則を記録する。元のマスは機械が入れない（下記）ので、戻せないことはない。保留中の駒は時間切れにしない。保留が破棄されて持ち上げ中に戻ったとき、すでに1秒を過ぎていれば、その場で時間切れとして扱う。
+- 持ち上げ中の駒の元のマスと、保留先のマスは、機械から見て埋まっているものとして扱う。`Game::machineCanEnter`、読みの行き先（`dests`）、運び出しの経路のすべてで同じ扱いにする（実機では保留先に駒がすでに置かれているため、機械の駒がぶつからないように）。
+- 置きの時刻: `Game::onHumanPlace(r, c, now, placedAt)` の `placedAt` は駒が置かれた時刻。ファームは BoardWatcher が駒を最初に検出した時刻（`placeSince_`）を渡し、シミュレータは `now` を渡す。置く間隔と持ち上げ上限は `placedAt` で判定する（BoardWatcher の 200ms の確定待ちのぶん人間が不利にならないように）。
+- 保留が成立したときのはさみ判定は、ほかの置きと同じ規則（機械が引いている途中の駒は盤上にないものとして扱う）を使う。
+- `Rules::timeLimitMs = 600000`（10分、ゲーム時計）。時間切れになったら、取った枚数の多いほうの勝ち、同じなら引き分け（`Winner::Draw` を足す）。機械が壁を作って守るだけでは勝てないようにするため。
 - Removing、Paused、Countdown のあいだは、持ち上げの時間と置く間隔の時計は止まる（ゲーム時計が止まるため）。
 
 ### 3.2 盤の食い違いによる一時停止（実機）
 
-Game に `pauseForMismatch(now)` と `resumeFromMismatch(now)` を足す。Play と Removing から Paused へ移り、移る前のフェーズを覚え、`mismatch()` を立てる。`mismatch()` が立っている間は `togglePause` で再開しない。`resumeFromMismatch` で元のフェーズへ戻る（Play へ戻るときは `resumeCountdownMs` の Countdown を挟む）。3.1 の `stuckHeld` も同じ一時停止で、元のマスが空いて駒を戻せる状態になったら解く。
+Game に `pauseForMismatch(cells[], count, now)` と `resumeFromMismatch(now)` を足す。Play と Removing から Paused へ移り、移る前のフェーズを覚え、`mismatch()` を立てる。食い違ったマスにいるはずの人間の駒、またはそこへ置かれた人間の駒には、人間のクールダウンを付ける（一時停止で時計を止めて考える使い方に罰を付けるため）。`mismatch()` が立っている間は `togglePause` で再開しない。`resumeFromMismatch` で元のフェーズへ戻る。Play へ戻るときは `resumeCountdownMs` の Countdown を挟み、MachineController はその Countdown のあいだに読み終えて、Play に戻った瞬間に動き始められるようにする（`lastRead_` を前倒しし、Countdown 中の読みを許す）。
 
-ファーム（`src/main.cpp`）は、BoardWatcher の処理のあと、センサの盤と `expected`（持ち上げ中の駒を除いた Game の盤）を、`machineCells` を除いて比べる。食い違いが 300ms 続いたら `pauseForMismatch`、一致が 300ms 続いたら `resumeFromMismatch`。一時停止中は LED で、駒があるべきマスを白、あってはいけないマスを赤で点滅させる（LedPlan に `mismatch` の色を足す）。BoardWatcher の `liftReported_`・`placeReported_` は、一時停止から再開するときに盤の状態から作り直す（`BoardWatcher::resync(sensed, expected)` を足す）。保留中の置き（3.1）は、実機では駒がすでにマスにあるので、`expected` には含めないが食い違いとして数えない（保留先のマスを比較から外す）。シミュレータでは食い違いが起きない（反則の操作は受け付けないだけ）ので、この仕組みは使わない。
+Removing から一時停止したときは、運び出しのジョブは引いている途中の1マスを引き終えて止まり、電磁石はそのままにして（運んでいる駒を離さない）、再開したら続ける。
+
+ファーム（`src/main.cpp`）は、BoardWatcher の処理のあと、センサの盤と `expected`（持ち上げ中の駒を除いた Game の盤）を比べる。比較から外すマスは、`machineCells`、通電中のヘッドから0.75マス以内（`HallScanner::setHold` と同じ範囲）、保留先のマス（実機では駒がすでにある）、持ち上げ中の駒の元のマス（空きのはず）。食い違いが 300ms 続いたら `pauseForMismatch`、一致が 300ms 続いたら `resumeFromMismatch`。一時停止中は LED で、駒があるべきマスを白、あってはいけないマスを赤で点滅させる（LedPlan に `mismatch` の色を足す）。持ち上げ中の駒の元のマスは、ふだんどおり行き先の青を表示する。BoardWatcher の `liftReported_`・`placeReported_` は、一時停止から再開するときに盤の状態から作り直す（`BoardWatcher::resync(sensed, expected)` を足す）。駒を滑らせたときに通り道のマスで一瞬だけ検出される分を 300ms の待ちで吸収できるかは、実機で確かめる項目として `hardware/test-log.md` に足す。シミュレータでは食い違いが起きない（反則の操作は受け付けないだけ）ので、この仕組みは使わない。
 
 ### 3.3 人間の時間のパラメータ
 
@@ -58,11 +64,13 @@ Game に `pauseForMismatch(now)` と `resumeFromMismatch(now)` を足す。Play 
 - H4（端 v が人間）: v をよそへ置き、クールダウン後に戻す: `tv + humanCooldownMs + humanMoveMs`（`humanIntervalMs` より長いので間隔は自動で満たす）。持ち上げてすぐ元のマスへ戻すのは取り消しで、取りの判定がないので数えない。
 - どれもできなければ `INF`。
 
+保留中の駒があるとき: その駒は時刻 `gap` に保留先へ必ず置かれるものとして扱う。保留先が列の端なら、その端は時刻 `gap` に人間で埋まる（H1 なら `T_h = gap` の候補）。保留が成立するまでほかの駒は持ち上げられないので、ほかの駒の置きは `gap + humanIntervalMs` 以降、持ち上げは `gap` 以降とする。
+
 ### 3.6 機械が避け始める時間と安全な行き先
 
 機械の駒 p を動かし始める時刻 `S(p) = max(cooldownRemain(p), headFree) + reactMs + 空送り（ヘッド→p）/ freeSpeed + engageMs`。引き始めた駒は取られないので、避けは引き始めた時点で済む。`reactMs` は最悪の値を使う。
 
-p の安全な行き先 d: p を d へ動かした盤で、(1) d を含む列の `T_h ≥ 到着時刻 + machineCooldownMs + reactMs + engageMs + margin`、(2) 元の列に残った駒を含む列の `T_h ≥ S(p) + margin`。到着時刻は `S(p) + 距離 / dragSpeed`。計算を省くため、p が動いたことによる人間の通り道の変化は無視し、元の盤で作った到達時刻表をそのまま使う。ただし d 自身と p の元のマスの占有は反映する。この判定は再帰しない。
+p の安全な行き先 d: p を d へ動かした盤で、(1) d を含む列の `T_h ≥ 到着時刻 + machineCooldownMs + reactMs + engageMs + margin`、(2) 元の列に残った駒を含む列の `T_h ≥ S(p) + margin`。到着時刻は `S(p) + 距離 / dragSpeed`。計算を省くため、到達時刻表は元の盤で作ったものを使い、p の元のマスか行き先 d と同じ行か列にいる人間の駒の分だけ作り直す（p がどいて開く通り道、d でふさがる通り道を反映するため。開く通り道を見落とすと危険側に誤る）。この判定は再帰しない。
 
 列 L を守る時刻 `save(L)` は、L の駒のうち安全な行き先を持つ駒の `S(p)` の最小。どの駒も持たなければ `INF`。
 
@@ -74,7 +82,7 @@ p の安全な行き先 d: p を d へ動かした盤で、(1) d を含む列の
 
 ### 3.8 攻め
 
-人間の駒の列 L について、機械が挟み終える時間 `T_m(L)` を、機械の駒1枚か2枚（別々の駒、またはクールダウンを挟んだ同じ駒）がヘッドを順に使って両端を埋める時間で求める（各手 = クールダウンの残りを待つ、空送り、吸着、引く距離）。人間が逃げ終える時間は `ready(h) + humanReactMs + humanLiftMs`。ただし持ち上げて逃げられるのは `maxHoldMs` までなので、`T_m − (ready(h) + humanReactMs + humanLiftMs) > maxHoldMs` のときは、持ち上げで逃げるには遅すぎる（早く持ち上げると時間切れで元のマスへ戻りクールダウンが付く）ものとして、逃げは「よそへ置く」`ready(h) + humanReactMs + humanMoveMs` とし、行き先がなければ逃げられない。取れる見込み `gain(L) = len × clamp(0.5 + (逃げ − T_m) / 2000, 0, 1)`。
+人間の駒の列 L について、機械が挟み終える時間 `T_m(L)` を、機械の駒1枚か2枚（別々の駒、またはクールダウンを挟んだ同じ駒）がヘッドを順に使って両端を埋める時間で求める（各手 = クールダウンの残りを待つ、空送り、吸着、引く距離）。人間が逃げ終える時間は `ready(h) + humanReactMs + humanLiftMs`（持ち上げれば取られない）。人間は機械の駒が引かれてくるのを見て到着の直前に持ち上げられるので、持ち上げの上限はこの見積もりに影響しない。持ち上げて逃げたあと元のマスへ戻した駒は、両側を機械に挟まれていても取られない（戻すのは手ではなく、取りの判定がない）。取れる見込み（機械が人間の逃げより先に挟み終えられる見込み）`gain(L) = len × clamp(0.5 + (逃げ − T_m) / 2000, 0, 1)`。
 
 ### 3.9 手の選び方
 
@@ -83,9 +91,9 @@ p の安全な行き先 d: p を d へ動かした盤で、(1) d を含む列の
 - 盤 b' は p を d へ動かし、取れる駒を取り除いたもの。`headFree` は m の到着時刻 D（動かないなら0）から始める。p は引き始めるまで元の列で、到着後は d の列で評価する。
 - 安全の条件: (a) p の元の列が引き始めまで守れる（`T_h(元の列) ≥ 引き始め + margin`）、(b) d が 3.6 の安全な行き先、(c) b' で 3.7 を行い守れない列がない。動かない手は (c) だけ。
 - 点数 = 今取れる枚数 × 100 + Σgain × (40 + 40 × 攻め気) + 攻め気 × 形 − D(秒) × 4 − 2 − 両取りの減点（動かない手は −D×4−2 なし）。形 = 前進度 × 30 ＋ 人間の駒と縦横に隣り合う数 × 8 ＋ 盤端に接する機械の駒の数 × 4 ＋ 縦に2枚並んだ組の数 × 4（前進度は機械の駒の `r/(n−1)` の和）。
-- 安全な候補があればその中で最高点、なければ全候補で 点数 = 今取れる枚数 × 100 − Σ(駒ごとの最大 risk) × 100 − D(秒) × 4。
+- 安全な候補があればその中で最高点、なければ全候補で 点数 = 今取れる枚数 × 100 + Σgain × (40 + 40 × 攻め気) − Σ(駒ごとの最大 risk) × 100 − D(秒) × 4（取られる見込みがあっても、取り返しを選べるように攻めの点を残す）。
 - 両取りの減点（つよいだけ）: 安全な候補を点数順に並べ、上位3手について、人間の脅威の手（下記）それぞれを指した盤で (c) を確かめる。破れる脅威の手があれば、その手の点数から 60 を引く。上位3手を確かめ終えた時点で、減点後の最高点を選ぶ（4位以下の手は減点なしで比べる）。
-- 人間の脅威の手: 人間の駒1枚の1手で、(i) 機械の列の端へ置く手、(ii) 機械の列の端にいる人間の駒をよそへ置く手（H3・H4 の準備）、(iii) 危ない列の駒の行き先をふさぐ手。`e` の早い順、同じなら人間の駒の id 順、次に行き先の `dests` の順で最大12手。脅威の手を指した盤では、人間の時計を `e(h,s)` 進め（各駒の `ready` をその分減らし、`gap` を `humanIntervalMs` にする）、機械の `headFree` と各駒の `cooldownRemain` も同じだけ進める。
+- 人間の脅威の手: 人間の駒1枚の1手で、(i) 機械の列の端へ置く手、(ii) 機械の列の端にいる人間の駒をよそへ置く手（H3・H4 の準備）、(iii) 危ない列の駒の行き先をふさぐ手。`e` の早い順、同じなら人間の駒の id 順、次に行き先の `dests` の順で最大12手。脅威の手を指した盤では、人間の時計を `e(h,s)` 進め（各駒の `ready` をその分減らし、`gap` を `humanIntervalMs` にする）、機械の `headFree` と各駒の `cooldownRemain` も同じだけ進める。保留中の駒があれば、その保留は脅威の手より先に成立したものとして盤に置く。到達時刻表は、動いた人間の駒と同じ行か列にいる人間の駒の分だけ作り直す。
 - margin: やさしい0、ふつう200ms、つよい300ms（自動対戦の結果で調整する。3.12）。
 - 同点: `s > best + 0.01` なら更新、`|s − best| ≤ 0.01` なら、Snapshot の盤・駒・時計（250ms 単位）と候補の番号から作る32ビットの FNV-1a ハッシュが小さいほうを選ぶ。
 
@@ -117,8 +125,8 @@ p の安全な行き先 d: p を d へ動かした盤で、(1) d を含む列の
 - 罠 A〜D と、その鏡像（左右）・平行移動した局面を、SimDriver で時間どおりに再現するテスト（新しいルールの下で）がすべて通る（機械の駒が取られない、または取られる前に引き始める）。
 - 自動対戦は種1〜500、10分打ち切り。記録する指標: 1局あたり機械が失った枚数（主）、取った枚数の差（主）、機械の勝率（引き分けは負け）、引き分け率、安全な候補が1つ以上あった読みの割合、見積もりの当たり具合（機械の駒が取られた場面のうち、取られる margin 以上前に risk ≥ 0.5 だった割合。読みが列ごとの risk を出すデバッグ出力 `AiDebug` を使う）。
 - 作り直し前の成績は、新しいルール（3.1）を入れたあと、今の読みで種ごとに記録する（`tools/baseline/` に JSON）。
-- 比較は種ごとの対で、主な指標について対のウィルコクソン符号順位検定（またはブートストラップの95%信頼区間）。
-- 条件: つよい対 Race・Race3・Trap で、機械が失った枚数が作り直し前より有意に少ない（p < 0.05）。つよい対 Random で、取った枚数の差が非劣性（作り直し後−前の差の95%信頼区間の下限が −0.5枚より上）。引き分け率が各条件で作り直し前 + 5ポイント以内。
+- 比較は種ごとの対で、主な指標について対のブートストラップ（1万回）で差の信頼区間を求める（失った枚数は0が多く同順位が多いので、ウィルコクソン検定は参考に出すだけ）。相手が3つ（Race、Race3、Trap）あるので、ボンフェローニ補正で各比較の有意水準を 0.05/3 とする（信頼区間は 98.3%）。
+- 条件: つよい対 Race・Race3・Trap で、機械が失った枚数が作り直し前より有意に少ない（差の 98.3% 信頼区間の上限が0未満）。つよい対 Random で、取った枚数の差が非劣性（作り直し後−前の差の95%信頼区間の下限が −0.5枚より上）。引き分け（時間切れで取った枚数が同じ）の割合が各条件で20%以下。
 - 条件を満たさないときに調整するもの: margin、両取りの減点の大きさ、危ない列の範囲（6000ms）、形の点の重み。調整の結果はこの計画に書き足す。
 - 正解表（`test/golden/ai_cases.txt`）を新しい読みで作り直し、PC と WASM で一致する。`think` の時間は PC で平均 2ms 以内、test_ai の最悪局面で 10ms 以内。ESP32 の `golden` コマンドが報告する最悪時間が 50ms 以内（実機での確認は後日）。
 
@@ -132,8 +140,11 @@ p の安全な行き先 d: p を d へ動かした盤で、(1) d を含む列の
 ## 5. ファイル
 
 ```
-lib/core/Rules.h                 maxHeld、humanIntervalMs、maxHoldMs
-lib/core/Game.h/.cpp             持ち上げ1枚、保留の置き、持ち上げ上限、盤の食い違いの一時停止、lastPlaceAt と持ち上げ時刻の保持
+lib/core/Types.h                 Winner::Draw
+lib/core/Rules.h                 maxHeld、humanIntervalMs、maxHoldMs、timeLimitMs
+lib/core/Game.h/.cpp             持ち上げ1枚、保留の置き、持ち上げ上限、機械が入れないマス、時間切れの勝敗、盤の食い違いの一時停止、lastPlaceAt と持ち上げ時刻の保持
+lib/core/MachineController.*     機械が入れないマスを運び出しの経路で避ける、一時停止からの再開時の読みの前倒し、Removing 中の一時停止
+hardware/test-log.md             駒を滑らせたときの検出と 300ms の待ちの確認項目
 lib/core/Ai.h                    PieceView に liftedAt、Snapshot に lastPlaceAt と保留の情報、AiDebug
 lib/core/AiCase.h/.cpp           正解表の形式に gap と持ち上げの経過時間を足す
 lib/core/Params.h                humanMoveMs、humanLiftMs、humanPlaceMs、humanReactMs
@@ -163,25 +174,25 @@ test/test_ai/、test/test_sim/    罠の局面と再現テスト、ボットの�
 
 共通の前提: 各ステップは1コミット。PC のテストは `pio test -e native`、WASM は `source ~/emsdk/emsdk_env.sh && npm run build:wasm && npm test`、自動対戦は `node tools/autoplay.mjs`。ESP32 のビルドは `node tools/gen-golden.mjs && pio run -e esp32dev && pio run -e rig`。盤は文字列から作るヘルパー（test_game、test_ai にあるもの）と `Game::onMachineStep` による駒の置き直しで組む。浮動小数のビルドはどこでも `-ffp-contract=off`。
 
-### Step 1: 人間の操作のルール（持ち上げ1枚、置く間隔と保留、持ち上げ上限）
+### Step 1: 人間の操作のルール（持ち上げ1枚、置く間隔と保留、持ち上げ上限、機械が入れないマス、時間切れの勝敗）
 
-**Files**: `lib/core/Rules.h`、`lib/core/Game.h`、`lib/core/Game.cpp`、`lib/core/HumanBot.cpp`、`test/test_game/test_main.cpp`、`test/test_sim/test_main.cpp`、`wasm/bindings.cpp`、`web/app.js`、`web/index.html`、`plans/2026-10-30_core-wasm-firmware.md`
+**Files**: `lib/core/Types.h`、`lib/core/Rules.h`、`lib/core/Game.h`、`lib/core/Game.cpp`、`lib/core/MachineController.cpp`、`lib/core/Ai.cpp`（行き先から機械が入れないマスを除くだけ）、`lib/core/HumanBot.cpp`、`lib/core/SimDriver.cpp`、`src/main.cpp`（`onHumanPlace` に `placedAt` を渡すだけ）、`test/test_game/test_main.cpp`、`test/test_machine/test_main.cpp`、`test/test_sim/test_main.cpp`、`wasm/bindings.cpp`、`web/app.js`、`web/index.html`、`tools/autoplay.mjs`、`plans/2026-10-30_core-wasm-firmware.md`
 
 **Do**:
-先にテストを書く。3.1 を Game に実装する（`maxHeld`、`humanIntervalMs` と `PlaceResult::Pending`、保留の成立と破棄、`maxHoldMs` の時間切れ、`stuckHeld`）。今の HumanBot（Random）を新しいルールで動くように直す（1枚だけ持つ、Pending を受けたら待つ）。bindings で新しい Rules と Pending を通す。画面は、Pending のとき駒を保留先に半透明で表示し、ドラッグ中に持ち上げ上限を過ぎて駒が戻ったらドラッグを終える。設定に「置く間隔」（0〜2秒）と「持ち上げの上限」（0.5〜5秒）を足す。`plans/2026-10-30_core-wasm-firmware.md` の3章のルールの「持ち上げ中は最大2枚」を、この計画の 3.1 を指す記述に置き換える。
+先にテストを書く。3.1 を Game に実装する（`maxHeld`、`humanIntervalMs` と `PlaceResult::Pending`、保留の成立と破棄、`maxHoldMs` の時間切れ、`placedAt`、持ち上げ中の元のマスと保留先を機械が入れないマスにすること、`timeLimitMs` と `Winner::Draw`）。MachineController の運び出しの経路と、今の Ai の行き先でも、機械が入れないマスを避ける。SimDriver と autoplay の10分打ち切りは、Game の時間切れの勝敗に置き換える（autoplay の表の引き分けは、取った枚数が同じ時間切れ）。今の HumanBot（Random）を新しいルールで動くように直す（1枚だけ持つ、Pending を受けたら待つ）。bindings で新しい Rules と Pending を通す。画面は、Pending のとき駒を保留先に半透明で表示し、ドラッグ中に持ち上げ上限を過ぎて駒が戻ったらドラッグを終える。設定に「置く間隔」（0〜2秒）と「持ち上げの上限」（0.5〜5秒）を足す。`plans/2026-10-30_core-wasm-firmware.md` の3章のルールの「持ち上げ中は最大2枚」を、この計画の 3.1 を指す記述に置き換える。
 
-**Test**: 2枚目の持ち上げは TooMany。置きから999msの置きは Pending で、1000ms の `tick` で成立しクールダウンとはさみ判定が付く。保留中に保留先が埋まれば破棄と反則。保留中に元のマスへ置けば取り消し。取り消しは間隔の起点にならない。持ち上げ999msでは持ち上げたまま、1000ms で元のマスに戻りクールダウンと反則。元のマスが埋まっていれば `stuckHeld` で Paused。Paused・Removing 中は持ち上げと間隔の時計が止まる。ボット対機械の100局（既存のテスト）が新しいルールで最後まで進む。
+**Test**: 2枚目の持ち上げは TooMany。置きから999msの置きは Pending で、1000ms の `tick` で成立しクールダウンとはさみ判定が付く。保留が成立したときのはさみ判定で、機械が引いている途中の駒は取られない。保留中に保留先が埋まれば破棄と反則。保留中に元のマスへ置けば取り消し。取り消しは間隔の起点にならない。保留が破棄されたとき1秒を過ぎていればその場で時間切れ。持ち上げ999msでは持ち上げたまま、1000ms で元のマスに戻りクールダウンと反則。`placedAt` が `now` より前なら、間隔と上限は `placedAt` で判定される。持ち上げ中の元のマスと保留先には `machineCanEnter` が false、運び出しの経路もそこを通らない。10分で取った枚数の多いほうが勝ち、同じなら引き分け。Paused・Removing 中は持ち上げと間隔の時計が止まる。ボット対機械の100局（既存のテスト）が新しいルールで最後まで進む。
 
 **Verify**: `pio test -e native` と `npm test` が通る。
 
 ### Step 2: 盤の食い違いによる一時停止（実機）
 
-**Files**: `lib/core/Game.h`、`lib/core/Game.cpp`、`lib/core/LedPlan.h`、`lib/core/LedPlan.cpp`、`lib/hwpure/BoardWatcher.h`、`lib/hwpure/BoardWatcher.cpp`、`src/main.cpp`、`test/test_game/test_main.cpp`、`test/test_hwpure/test_main.cpp`、`test/test_machine/test_main.cpp`
+**Files**: `lib/core/Game.h`、`lib/core/Game.cpp`、`lib/core/MachineController.h`、`lib/core/MachineController.cpp`、`lib/core/LedPlan.h`、`lib/core/LedPlan.cpp`、`lib/hwpure/BoardWatcher.h`、`lib/hwpure/BoardWatcher.cpp`、`src/main.cpp`、`hardware/test-log.md`、`test/test_game/test_main.cpp`、`test/test_hwpure/test_main.cpp`、`test/test_machine/test_main.cpp`
 
 **Do**:
-先にテストを書く。3.2 の `pauseForMismatch`・`resumeFromMismatch`・`mismatch()`、LedPlan の mismatch の色（あるべきマスは白、あってはいけないマスは赤の点滅）、`BoardWatcher::resync` と保留先の除外を実装する。`src/main.cpp` に食い違いの検出（300ms）と一時停止・再開、Pending の置きの扱いを足す。
+先にテストを書く。3.2 の `pauseForMismatch`（食い違ったマスの人間の駒にクールダウン）・`resumeFromMismatch`・`mismatch()`、再開時の Countdown 中に機械が読み終える扱い、Removing 中の一時停止でジョブを1マス引き終えて電磁石を保つ扱い、LedPlan の mismatch の色（あるべきマスは白、あってはいけないマスは赤の点滅）、`BoardWatcher::resync` を実装する。`src/main.cpp` に食い違いの検出（比較から外すマスは 3.2 のとおり、300ms）と一時停止・再開を足す。`hardware/test-log.md` に駒を滑らせたときの確認項目を足す。
 
-**Test**: Play と Removing から一時停止して元のフェーズへ戻る（Play へは Countdown を挟む）、mismatch 中は `togglePause` で再開しない、`stuckHeld` も同じ扱い、LED の mismatch の色、resync 後に Lift・Place が再び報告される、保留先のマスは食い違いに数えない。
+**Test**: Play と Removing から一時停止して元のフェーズへ戻る（Play へは Countdown を挟む）、食い違ったマスの人間の駒にクールダウンが付く、mismatch 中は `togglePause` で再開しない、再開の Countdown が終わった瞬間に機械のジョブが始められる（読みが済んでいる）、Removing 中の一時停止で運び出しが1マス引き終えて止まり再開で続く、LED の mismatch の色、resync 後に Lift・Place が再び報告される。
 
 **Verify**: `pio test -e native` が通る。`pio run -e esp32dev` と `pio run -e rig` が通る（実機での確認は後日）。
 
@@ -192,7 +203,7 @@ test/test_ai/、test/test_sim/    罠の局面と再現テスト、ボットの�
 **Do**:
 先にテストを書く。Params に 3.3 の4項目、PieceView に `liftedAt`、Snapshot に `lastPlaceAt` と保留の情報を足し、`Game::snapshot` で埋める。正解表の形式に gap と持ち上げの経過時間の欄を足し（`AiCase.h` の説明も直す）、既存の表は新しい欄を `-` として読めるようにする。RaceTime を 3.4〜3.8 と 3.10 のとおり純粋関数で作る（到達時刻表、`T_h`、`S(p)` と安全な行き先、危ない列とヘッドの割り当て、risk、`T_m` と gain）。時間は float の ms、`INF` は専用の定数で、差を取る前に必ず判定する。
 
-**Test**: 罠 A〜D の局面で `T_h` が手計算の値になる（例: 罠 A の H2 が `max(500, gap) = 500` と `max(500 + 1000, 500 + 500, 500) = 1500`、罠 B の H4 が `500 + 3000 + 500 = 4000`、罠 C の H3 が `max(500 + 1000, ready(g) + 500)`）。置く間隔の残り `gap` が効く。持ち上げ中の駒は `humanPlaceMs` で、持ち上げ上限の残りを超える手順を数えない。盤端の列は `INF`、`INF` の列の risk は0。危ない列が2つで片方しか守れないとき、守れる駒の多いほうを選ぶ。列の片方を動かすと残りが取られる形は安全な行き先にならない。持ち上げてすぐ戻す手順を数えない。確保中のマスへは届かない。やさしいで H2〜H4 が `INF`。
+**Test**: 罠 A〜D の局面で `T_h` が手計算の値になる（例: 罠 A の H2 が `max(500, gap) = 500` と `max(500 + 1000, 500 + 500, 500) = 1500`、罠 B の H4 が `500 + 3000 + 500 = 4000`、罠 C の H3 が `max(500 + 1000, ready(g) + 500)`）。置く間隔の残り `gap` が効く。保留中の駒の保留先が列の端なら `T_h = gap`、保留中はほかの駒の置きが `gap + humanIntervalMs` 以降になる。持ち上げ中の駒は `humanPlaceMs` で、持ち上げ上限の残りを超える手順を数えない。一段目の駒が動くと、その筋から元の列の端へ届くようになる（到達時刻表の作り直し）。盤端の列は `INF`、`INF` の列の risk は0。危ない列が2つで片方しか守れないとき、守れる駒の多いほうを選ぶ。列の片方を動かすと残りが取られる形は安全な行き先にならない。持ち上げてすぐ戻す手順を数えない。確保中のマスへは届かない。やさしいで H2〜H4 が `INF`。
 
 **Verify**: `pio test -e native` と `npm test` が通る。
 
