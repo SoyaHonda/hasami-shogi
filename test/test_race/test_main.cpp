@@ -203,13 +203,56 @@ void test_held_piece_and_hold_limit() {
       "HHhHHHH");
   // The held piece goes to (5,2) in humanPlace 350, then (6,4): max(1350, 850, 500).
   TEST_ASSERT_EQUAL_FLOAT(1350.0f, thAt(s, 5, 3, 0, 1));
-  // Lifted 700 ms ago: 300 ms left < 350, so its moves do not count. Best left: (6,1) two moves
-  // to (5,2) at 4000, then (6,4) at 5000.
+  // Lifted 700 ms ago: 300 ms left < 350, so its moves do not count, and nothing else is lifted
+  // before the hold limit sends it back at 300 (one piece in hand). Best left: (6,1) two moves
+  // to (5,2) at 300 + 500 + 3000 + 500 = 4300, then (6,4) at 5300.
   pieceAt(s, 6, 2)->liftedAt = CLOCK - 700;
-  TEST_ASSERT_EQUAL_FLOAT(5000.0f, thAt(s, 5, 3, 0, 1));
+  TEST_ASSERT_EQUAL_FLOAT(5300.0f, thAt(s, 5, 3, 0, 1));
   // No hold limit: counts again.
   s.maxHoldMs = 0;
   TEST_ASSERT_EQUAL_FLOAT(1350.0f, thAt(s, 5, 3, 0, 1));
+}
+
+void test_held_origin_needs_placement_and_interval() {
+  // Trap C with v held from (3,2): putting it back fills (3,2) again, so another piece lands
+  // there only after v is placed elsewhere (humanPlace 350) and the interval: 1350, not the 850
+  // of (6,2) lifted once v is down.
+  Snapshot s = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "..hMH..\n"
+      ".......\n"
+      ".......\n"
+      "..H....");
+  TEST_ASSERT_EQUAL_FLOAT(1350.0f, thAt(s, 3, 3, 0, 1));
+}
+
+void test_human_reacts_to_machine_move() {
+  // (3,3) -> (5,3) between (6,2) and (6,4)'s reach. At once: (6,2) -> (5,2) at 500, (6,4) ->
+  // (5,4) at 1500. Reacting at 1000: 1500 and 2500. With (5,2) planned (the human is heading
+  // there anyway): 500, then max(1500, 1000 + 500) = 1500.
+  Snapshot s = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      "..H.H..");
+  const RaceTimes t = raceTimes(s, Params());
+  RaceState st;
+  raceInit(st, s, t);
+  float thDest, thRest;
+  raceDestTimes(st, t, 3, 3, 5, 3, &thDest, &thRest);
+  TEST_ASSERT_EQUAL_FLOAT(1500.0f, thDest);
+  raceDestTimes(st, t, 3, 3, 5, 3, &thDest, &thRest, 1000.0f);
+  TEST_ASSERT_EQUAL_FLOAT(2500.0f, thDest);
+  RaceMask planned;
+  planned.clear();
+  planned.set(5 * 7 + 2);
+  raceDestTimes(st, t, 3, 3, 5, 3, &thDest, &thRest, 1000.0f, &planned);
+  TEST_ASSERT_EQUAL_FLOAT(1500.0f, thDest);
 }
 
 void test_reserved_square_unreachable() {
@@ -388,7 +431,7 @@ void test_move_that_exposes_rest_is_not_safe() {
 
 void test_guard_prefers_more_pieces() {
   // Two lines closing at 1500: L1 = M(6,1) (1 piece), L2 = M(6,4) M(6,5) (2 pieces). The head at
-  // (6,3) can guard only one in time; L1 sorts first, but guarding L2 saves more pieces.
+  // (6,2) (the same travel to both along the grid lines) can guard only one in time; L1 sorts first, but guarding L2 saves more pieces.
   Snapshot s = makeSnap(
       ".......\n"
       ".......\n"
@@ -397,7 +440,7 @@ void test_guard_prefers_more_pieces() {
       ".......\n"
       "H.HH..H\n"
       ".M..MM.",
-      6.0f, 3.0f);
+      6.0f, 2.0f);
   const RaceTimes t = raceTimes(s, Params());
   RaceState st;
   raceInit(st, s, t);
@@ -431,7 +474,7 @@ void test_guard_prefers_more_pieces() {
       ".......\n"
       "H.H....\n"
       ".M.....",
-      6.0f, 3.0f);
+      6.0f, 2.0f);
   RaceState st1;
   raceInit(st1, one, t);
   const int k1 = raceAssess(st1, t, ev);
@@ -530,6 +573,8 @@ int main(int, char**) {
   RUN_TEST(test_pending_target_closes_at_gap);
   RUN_TEST(test_pending_delays_other_placements);
   RUN_TEST(test_held_piece_and_hold_limit);
+  RUN_TEST(test_held_origin_needs_placement_and_interval);
+  RUN_TEST(test_human_reacts_to_machine_move);
   RUN_TEST(test_reserved_square_unreachable);
   RUN_TEST(test_easy_reads_only_held_h1);
   RUN_TEST(test_edge_line_is_inf_and_has_no_risk);

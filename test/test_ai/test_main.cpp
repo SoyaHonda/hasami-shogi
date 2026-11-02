@@ -5,10 +5,12 @@
 #include "AiCase.h"
 #include "Board.h"
 #include "Game.h"
+#include "RaceTime.h"
+#include <chrono>
 
 // Build a snapshot from rows separated by '\n': '.' empty, 'H' human, 'M' machine,
-// 'h' a held human piece (its origin square is empty on the board). Pieces get ids 1.. in
-// row-major order. All cooldowns are over (clock 10000).
+// 'h' a held human piece (its origin square is empty on the board, just lifted). Pieces get ids
+// 1.. in row-major order. All cooldowns are over (clock 10000).
 static Snapshot makeSnap(const char* s, float headR, float headC) {
   Snapshot snap{};
   int n = 0;
@@ -38,6 +40,7 @@ static Snapshot makeSnap(const char* s, float headR, float headC) {
       pv.alive = true;
       pv.held = (*p == 'h');
       if (pv.held) {
+        pv.liftedAt = snap.clockMs;
         snap.heldIds[snap.heldCount++] = pv.id;
       } else {
         snap.board.set(r, c, pv.side);
@@ -197,6 +200,11 @@ void test_cooldown_piece_not_moved() {
   Params p;
   AiMove m = think(s, p);
   TEST_ASSERT_TRUE(m.none || m.pieceId != 1);
+  // Not even a candidate: only "stay" and the cooled-down M(3,2) are weighed.
+  AiCandidate c[AI_MAX_CANDIDATES];
+  const int k = thinkCandidates(s, p, c, AI_MAX_CANDIDATES);
+  TEST_ASSERT_TRUE(k > 1);
+  for (int i = 0; i < k; i++) TEST_ASSERT_TRUE(c[i].none || c[i].pieceId != 1);
 }
 
 // test/golden/ai_cases.txt, relative to the project directory (where `pio test` runs).
@@ -224,31 +232,228 @@ void test_hard_does_not_walk_into_two_piece_trap() {
   TEST_ASSERT_FALSE(openRow && m.toR >= 1);
 }
 
-// A machine piece between H and an empty square whose human piece stepped away (still cooling
-// down) leaves before that piece can come back.
-void test_hard_leaves_after_flank_steps_away() {
+// A machine piece between H(4,2) and an empty square that the human piece at (5,4) reaches once its
+// cooldown is over (trap D): the read counts that piece. It stays while it can still get out in
+// time and pulls the piece at (4,3) out before (5,4) can close the line.
+void test_hard_leaves_before_flank_cooldown_ends() {
   Snapshot s = makeSnap("MMM.MMM\n.......\n.......\n.......\nHHHM...\n....H..\n...H.HH", 4.0f, 3.0f);
+  const uint32_t ready = s.clockMs + 3000;
   for (int i = 0; i < s.count; i++)
-    if (s.pieces[i].r == 5 && s.pieces[i].c == 4) s.pieces[i].cooldownUntil = s.clockMs + 3000;
+    if (s.pieces[i].r == 5 && s.pieces[i].c == 4) s.pieces[i].cooldownUntil = ready;
   Params p;
   p.level = Level::Hard;
-  AiMove m = think(s, p);
-  TEST_ASSERT_FALSE(m.none);
-  const PieceView& q = pieceById(s, m.pieceId);
-  TEST_ASSERT_EQUAL_INT(4, q.r);
-  TEST_ASSERT_EQUAL_INT(3, q.c);
+  const RaceTimes t = raceTimes(s, p);
+  // Reads every 250 ms with nothing else moving.
+  bool moved = false;
+  for (uint32_t clock = s.clockMs; clock < ready + 500 && !moved; clock += 250) {
+    Snapshot at = s;
+    at.clockMs = clock;
+    AiDebug dbg;
+    const AiMove m = think(at, p, &dbg);
+    // T_h of the row line: (5,4) lands on (4,4) humanMoveMs after its cooldown.
+    const float th = static_cast<float>(ready - clock) + 500.0f;
+    if (m.none) {
+      // Staying is chosen only while the line is guarded.
+      TEST_ASSERT_EQUAL_FLOAT(0.0f, dbg.pieceRisk[4 * 7 + 3]);
+      continue;
+    }
+    const PieceView& q = pieceById(at, m.pieceId);
+    TEST_ASSERT_EQUAL_INT(4, q.r);
+    TEST_ASSERT_EQUAL_INT(3, q.c);
+    // In time: it starts pulling (engage, no travel) at least the margin before the line closes.
+    TEST_ASSERT_TRUE(t.engage + t.margin <= th);
+    moved = true;
+  }
+  TEST_ASSERT_TRUE(moved);
 }
 
-// Sitting between two human pieces is not safe when one can step away and another step in.
-void test_hard_leaves_sandwich_with_refill() {
-  Snapshot s = makeSnap("MMM.MMM\n.......\n.......\n.......\nHHHMHHH\n.......\n....H..", 4.0f, 3.0f);
+// Sitting between two human pieces: one steps away and another steps into its square (H3 at
+// 1500 ms, trap C). With the head on the piece the line is guarded (it can leave in time) and the
+// read stays; with the head far away it cannot, and the read sees the risk. Easy reads only a held
+// piece's single placement and sees nothing.
+void test_refill_threat_is_read() {
+  const char* layout = "MMM.MMM\n.......\n.......\n.......\nHHHMHHH\n.......\n....H..";
   Params p;
   p.level = Level::Hard;
-  AiMove m = think(s, p);
+  AiDebug near;
+  const AiMove m = think(makeSnap(layout, 4.0f, 3.0f), p, &near);
+  TEST_ASSERT_TRUE(m.none);
+  TEST_ASSERT_TRUE(near.safeCandidates > 0);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, near.pieceRisk[4 * 7 + 3]);
+  AiDebug far;
+  think(makeSnap(layout, 0.0f, 0.0f), p, &far);
+  TEST_ASSERT_TRUE(far.pieceRisk[4 * 7 + 3] >= 0.5f);
+  bool rowLine = false;
+  for (int i = 0; i < far.lineCount; i++) {
+    const AiLineRisk& L = far.lines[i];
+    if (L.r == 4 && L.c == 3 && L.dr == 0) {
+      rowLine = true;
+      TEST_ASSERT_EQUAL_FLOAT(far.pieceRisk[4 * 7 + 3], L.risk);
+    }
+  }
+  TEST_ASSERT_TRUE(rowLine);
+  p.level = Level::Easy;
+  AiDebug easy;
+  think(makeSnap(layout, 0.0f, 0.0f), p, &easy);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, easy.pieceRisk[4 * 7 + 3]);
+}
+
+// Equal scores are decided by the hash of the snapshot (board, pieces, clock in 250 ms units) and
+// the candidate's number: the same snapshot always gives the same move, another clock may give
+// another of the tied moves. Here the held piece at (5,3) closes (2,3) in 350 ms; nothing is safe
+// and M(1,3) stepping to (2,3), (1,2) or (1,4) lose the same.
+void test_tie_broken_by_hash() {
+  const char* layout = "...H...\n...M...\n.......\n.......\n.......\n...h...\nM......";
+  Params p;
+  p.level = Level::Easy;
+  AiCandidate c[AI_MAX_CANDIDATES];
+  const int k = thinkCandidates(makeSnap(layout, 0.0f, 3.0f), p, c, AI_MAX_CANDIDATES);
+  float best = -1e9f;
+  for (int i = 0; i < k; i++)
+    if (c[i].contending && c[i].score > best) best = c[i].score;
+  int tied = 0;
+  for (int i = 0; i < k; i++)
+    if (c[i].contending && c[i].score >= best - 0.01f) tied++;
+  TEST_ASSERT_TRUE(tied >= 2);
+  bool seen[MAX_N * MAX_N] = {};
+  int kinds = 0;
+  for (uint32_t step = 0; step < 16; step++) {
+    Snapshot s = makeSnap(layout, 0.0f, 3.0f);
+    s.clockMs += 250 * step;
+    for (int i = 0; i < s.count; i++)
+      if (s.pieces[i].held) s.pieces[i].liftedAt = s.clockMs;
+    const AiMove a = think(s, p), b = think(s, p);
+    TEST_ASSERT_FALSE(a.none);
+    TEST_ASSERT_EQUAL_INT(a.pieceId, b.pieceId);
+    TEST_ASSERT_EQUAL_INT(a.toR, b.toR);
+    TEST_ASSERT_EQUAL_INT(a.toC, b.toC);
+    TEST_ASSERT_FLOAT_WITHIN(0.01f, best, a.score);
+    if (!seen[a.toR * 7 + a.toC]) kinds++;
+    seen[a.toR * 7 + a.toC] = true;
+  }
+  TEST_ASSERT_TRUE(kinds >= 2);
+}
+
+// No safe candidate (normal): the read picks the least expected loss, here moving the threatened
+// M(1,3) (it may still be caught, but less likely than staying).
+void test_no_safe_move_least_loss() {
+  Snapshot s = makeSnap("...H...\n...M...\n.......\n.......\n.......\n...h...\nM......", 0.0f, 3.0f);
+  Params p;
+  p.level = Level::Normal;
+  AiDebug dbg;
+  const AiMove m = think(s, p, &dbg);
+  TEST_ASSERT_EQUAL_INT(0, dbg.safeCandidates);
+  TEST_ASSERT_TRUE(dbg.pieceRisk[1 * 7 + 3] > 0.5f);
   TEST_ASSERT_FALSE(m.none);
-  const PieceView& q = pieceById(s, m.pieceId);
+  TEST_ASSERT_EQUAL_INT(2, m.pieceId);  // M(1,3)
+  AiCandidate c[AI_MAX_CANDIDATES];
+  const int k = thinkCandidates(s, p, c, AI_MAX_CANDIDATES);
+  TEST_ASSERT_EQUAL_INT(dbg.candidates, k);
+  for (int i = 0; i < k; i++) {
+    TEST_ASSERT_TRUE(c[i].contending);
+    TEST_ASSERT_TRUE(c[i].score <= m.score + 0.01f);
+  }
+}
+
+// Hard's fork penalty: the three best safe candidates (stay, (4,3)>(4,1), (4,3)>(4,2)) each lose to
+// some human threat move and take -60; the fourth, (4,3)>(3,3), is not checked and wins. Normal
+// has no fork check and stays.
+void test_fork_penalty_on_top_three_only() {
+  const char* line =
+      "...M.....M.H................H..M...M..M.M..M..... 2,2 5.5,4.5 1,2=1700;4,0=1500;5,3=1400 - 100 "
+      "3,1,200,250,H,0.75,0 none";
+  AiCase c;
+  TEST_ASSERT_TRUE(parseAiCase(line, c));
+  AiDebug dbg;
+  const AiMove m = think(c.snap, c.params, &dbg);
+  TEST_ASSERT_EQUAL_INT(3, dbg.forkChecked);
+  TEST_ASSERT_EQUAL_INT(3, dbg.forkPenalized);
+  TEST_ASSERT_FALSE(m.none);
+  const PieceView& q = c.snap.pieces[m.pieceId - 1];
   TEST_ASSERT_EQUAL_INT(4, q.r);
   TEST_ASSERT_EQUAL_INT(3, q.c);
+  TEST_ASSERT_EQUAL_INT(3, m.toR);
+  TEST_ASSERT_EQUAL_INT(3, m.toC);
+  AiCandidate a[AI_MAX_CANDIDATES];
+  const int k = thinkCandidates(c.snap, c.params, a, AI_MAX_CANDIDATES);
+  int penalized = 0;
+  float lowestPenalized = 1e9f, highestOther = -1e9f;
+  for (int i = 0; i < k; i++) {
+    if (!a[i].safe) continue;
+    const float before = a[i].score + a[i].penalty;
+    if (a[i].penalty > 0.0f) {
+      penalized++;
+      TEST_ASSERT_EQUAL_FLOAT(60.0f, a[i].penalty);
+      if (before < lowestPenalized) lowestPenalized = before;
+    } else if (before > highestOther) {
+      highestOther = before;
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(3, penalized);
+  TEST_ASSERT_TRUE(lowestPenalized > highestOther);  // the penalized ones were the top three
+  Params normal = c.params;
+  normal.level = Level::Normal;
+  AiDebug nd;
+  TEST_ASSERT_TRUE(think(c.snap, normal, &nd).none);
+  TEST_ASSERT_EQUAL_INT(0, nd.forkChecked);
+}
+
+// think() time on the PC (plan 2026-10-31 3.13): mean over positions of a game and the golden
+// table within 2 ms, and a position with many pieces and threatened lines within 10 ms.
+static double thinkMicros(const Snapshot& s, const Params& p) {
+  double best = 1e18;
+  for (int k = 0; k < 3; k++) {
+    const auto t0 = std::chrono::steady_clock::now();
+    const AiMove m = think(s, p);
+    (void)m;
+    const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count();
+    if (us < best) best = us;
+  }
+  return best;
+}
+
+void test_think_time() {
+  double total = 0.0;
+  int count = 0;
+  // Positions of a game (normal and hard) where the human pieces step up one after another.
+  for (int level = 0; level < 2; level++) {
+    Params p;
+    p.level = level == 0 ? Level::Normal : Level::Hard;
+    Game g;
+    g.start(0);
+    g.tick(3000);
+    uint32_t now = 3000;
+    // Human moves by hand: each back-row piece steps up in turn, every 1.5 s.
+    for (int step = 0; step < 14 && g.phase() == Phase::Play; step++) {
+      const int col = step % 7, row = step < 7 ? 6 : 5, to = step < 7 ? 5 : 4;
+      if (g.onHumanLift(row, col, now) == LiftResult::Ok) g.onHumanPlace(to, col, now + 400);
+      now += 1500;
+      g.tick(now);
+      const Snapshot s = g.snapshot(0.0f, 3.0f);
+      total += thinkMicros(s, p);
+      count++;
+    }
+  }
+  FILE* f = openGolden();
+  TEST_ASSERT_NOT_NULL(f);
+  char line[512];
+  while (std::fgets(line, sizeof(line), f)) {
+    AiCase c;
+    if (isAiCaseSkippable(line) || !parseAiCase(line, c)) continue;
+    total += thinkMicros(c.snap, c.params);
+    count++;
+  }
+  std::fclose(f);
+  const double mean = total / count;
+  // Seven machine pieces in the open next to seven human pieces: every line threatened, no safe
+  // candidate, so every candidate's assessment runs (the heaviest case found by a random search).
+  AiCase worst;
+  TEST_ASSERT_TRUE(parseAiCase(
+      "HMM....M.......H.M.H...H......H...HM...MM..H..... - 0,0 - - - 4,1.5,200,250,H,0.5,1 none", worst));
+  const double worstUs = thinkMicros(worst.snap, worst.params);
+  printf("think: mean %.0f us over %d positions, worst position %.0f us\n", mean, count, worstUs);
+  TEST_ASSERT_TRUE(mean <= 2000.0);
+  TEST_ASSERT_TRUE(worstUs <= 10000.0);
 }
 
 void test_ai_case_parser() {
@@ -390,8 +595,12 @@ int main(int, char**) {
   RUN_TEST(test_tie_prefers_piece_nearer_head);
   RUN_TEST(test_cooldown_piece_not_moved);
   RUN_TEST(test_hard_does_not_walk_into_two_piece_trap);
-  RUN_TEST(test_hard_leaves_after_flank_steps_away);
-  RUN_TEST(test_hard_leaves_sandwich_with_refill);
+  RUN_TEST(test_hard_leaves_before_flank_cooldown_ends);
+  RUN_TEST(test_refill_threat_is_read);
+  RUN_TEST(test_tie_broken_by_hash);
+  RUN_TEST(test_no_safe_move_least_loss);
+  RUN_TEST(test_fork_penalty_on_top_three_only);
+  RUN_TEST(test_think_time);
   RUN_TEST(test_ai_case_parser);
   RUN_TEST(test_snapshot_fields);
   RUN_TEST(test_golden_cases);

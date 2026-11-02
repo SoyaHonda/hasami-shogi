@@ -57,12 +57,13 @@
 #endif
 
 // think() (the `ai` command) and the golden table need more than the default
-// 8 KB loop stack.
-SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+// 8 KB loop stack: the time-race read (plan 2026-10-31 3.9) measures about 17 KB at its deepest
+// (Xtensa -fstack-usage), so 24 KB leaves room for the register windows.
+SET_LOOP_TASK_STACK_SIZE(24 * 1024);
 
 namespace {
 
-constexpr uint32_t THINK_STACK = 16 * 1024;
+constexpr uint32_t THINK_STACK = 24 * 1024;  // see SET_LOOP_TASK_STACK_SIZE above
 constexpr UBaseType_t THINK_PRIORITY = 1;
 constexpr BaseType_t THINK_CORE = 0;
 constexpr uint32_t LED_PERIOD_MS = 33;  // ~30 Hz

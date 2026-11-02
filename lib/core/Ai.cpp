@@ -1,291 +1,676 @@
 #include "Ai.h"
-#include <cmath>
-#include <cstdlib>
 #include "RaceTime.h"
 
-// Port of think() from the original simulator (sim/hasami-sim.html). Everything is float and
-// evaluated in the same order as the original so that every build picks the same move.
+// Move choice of plan 2026-10-31 3.9-3.11: the race of RaceTime (how soon the human can close a
+// machine line against how soon the machine can start pulling a piece out of it) decides which
+// candidates are safe; among the safe ones the attack (gain) and shape points decide; without a
+// safe one, the candidate losing the least is chosen. Pure function of the snapshot, float only
+// (+ - * / and sqrt), so that every build picks the same move (builds use -ffp-contract=off).
 
 namespace {
 
-struct Threat {
-  int r, c;
-  float w;
-  bool held;
+// Tuning knobs of 3.13 that live here (the margin and the threatened-line horizon are in
+// RaceTime: raceTimes() and RACE_DANGER_MS).
+constexpr float FORK_PENALTY = 60.0f;  // Hard: a top safe candidate a human threat move breaks
+constexpr int FORK_TOP = 3;            // safe candidates checked for the fork penalty
+constexpr int FORK_THREATS = 12;       // human threat moves checked per candidate
+// Shape weights (3.9): advance (sum of r/(n-1)), human pieces beside a machine piece, machine
+// pieces on the board's edge, vertical pairs of machine pieces.
+constexpr float SHAPE_ADVANCE = 30.0f, SHAPE_ADJACENT = 8.0f, SHAPE_EDGE = 4.0f, SHAPE_PAIR = 4.0f;
+constexpr float TIE_EPS = 0.01f;
+
+float fmax2(float a, float b) { return a > b ? a : b; }
+float fmin2(float a, float b) { return a < b ? a : b; }
+float clamp01(float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; }
+bool atLeast(float t, float need) { return raceInf(t) || t >= need; }
+
+// 32-bit FNV-1a.
+struct Fnv {
+  uint32_t h = 2166136261u;
+  void byte(uint32_t b) {
+    h ^= b & 0xFFu;
+    h *= 16777619u;
+  }
+  void u32(uint32_t v) {
+    for (int i = 0; i < 4; i++) byte(v >> (8 * i));
+  }
 };
 
-struct Ctx {
-  int n;
-  float aggr;
-  Threat threats[2 * MAX_N];
-  int threatCount;
-};
-
-// Most pieces the human piece at (r,c) can capture with one move on bb (bb is restored).
-int bestCapture(Board& bb, int8_t side, int r, int c) {
-  int d[MAX_N * MAX_N];
-  int caps[MAX_N * MAX_N];
-  const int k = dests(bb, r, c, d);
-  int best = 0;
-  for (int i = 0; i < k; i++) {
-    bb.cells[d[i]] = side;
-    const int n = capturesAt(bb, side, d[i] / bb.n, d[i] % bb.n, caps);
-    bb.cells[d[i]] = EMPTY;
-    if (n > best) best = n;
+// Tie-break hash of 3.9: board, pieces and clock (cooldowns and clock in 250 ms units).
+uint32_t snapshotHash(const Snapshot& s) {
+  Fnv f;
+  const int n = s.board.n;
+  f.byte(static_cast<uint32_t>(n));
+  for (int i = 0; i < n * n; i++) f.byte(static_cast<uint32_t>(s.board.cells[i]));
+  for (int i = 0; i < s.count; i++) {
+    const PieceView& q = s.pieces[i];
+    f.u32(static_cast<uint32_t>(q.id));
+    f.byte(static_cast<uint32_t>(q.side));
+    f.byte(static_cast<uint32_t>(q.r));
+    f.byte(static_cast<uint32_t>(q.c));
+    f.byte((q.alive ? 1u : 0u) | (q.held ? 2u : 0u));
+    const uint32_t rem = q.cooldownUntil > s.clockMs ? q.cooldownUntil - s.clockMs : 0;
+    f.u32((rem + 249u) / 250u);
   }
-  return best;
+  f.u32(s.clockMs / 250u);
+  return f.h;
 }
 
-// Whether the piece at (r,c) reaches the empty square (tr,tc) in one move on bb.
-bool reaches(const Board& bb, int r, int c, int tr, int tc) {
-  if ((r == tr) == (c == tc) || bb.at(tr, tc) != EMPTY) return false;
-  const int dr = tr > r ? 1 : tr < r ? -1 : 0, dc = tc > c ? 1 : tc < c ? -1 : 0;
-  for (int rr = r + dr, cc = c + dc; rr != tr || cc != tc; rr += dr, cc += dc)
-    if (bb.at(rr, cc) != EMPTY) return false;
-  return true;
+uint32_t candidateHash(uint32_t base, int index) {
+  Fnv f;
+  f.h = base;
+  f.u32(static_cast<uint32_t>(index));
+  return f.h;
 }
 
-// Strongest threat other than `skip` that reaches (tr,tc) in one move on bb (0 if none).
-float reachWeight(const Ctx& x, const Board& bb, int tr, int tc, int skip) {
-  float w = 0.0f;
-  for (int t = 0; t < x.threatCount; t++) {
-    const Threat& h = x.threats[t];
-    if (t == skip || (!h.held && bb.cells[h.r * x.n + h.c] != HUMAN)) continue;
-    if (h.w > w && reaches(bb, h.r, h.c, tr, tc)) w = h.w;
-  }
-  return w;
+// Whether a (score, hash) beats b: higher by more than TIE_EPS, or within it with a smaller hash.
+bool beats(float sa, uint32_t ha, float sb, uint32_t hb) {
+  if (sa > sb + TIE_EPS) return true;
+  if (sb > sa + TIE_EPS) return false;
+  return ha < hb;
 }
 
-// Captures the human can make with two quick moves of two different pieces, which one-move
-// danger misses: both ends of a machine line empty and each reachable by its own piece, or a
-// machine line already sitting between two human pieces (one steps away, another steps in).
-// The human's cooldowns are per piece, so two pieces can move back to back faster than the
-// machine can react with its single head. With `risk`, also raises risk[square] of every piece of
-// a line to 0.8 x its weight (at most 1; AiDebug).
-float danger2(const Ctx& x, Board bb, float* risk = nullptr) {
-  float mx = 0.0f, sum = 0.0f;
-  for (int i = 0; i < x.n * x.n; i++) {
-    if (bb.cells[i] != MACHINE) continue;
-    const int r = i / x.n, c = i % x.n;
-    for (int d = 0; d < 4; d += 2) {  // down (rows) and right (columns)
-      const int dr = DIR_R[d], dc = DIR_C[d];
-      if (bb.inside(r - dr, c - dc) && bb.at(r - dr, c - dc) == MACHINE) continue;  // not the line's start
-      int len = 1;
-      while (bb.inside(r + dr * len, c + dc * len) && bb.at(r + dr * len, c + dc * len) == MACHINE) len++;
-      const int ar = r - dr, ac = c - dc, br = r + dr * len, bc = c + dc * len;
-      if (!bb.inside(ar, ac) || !bb.inside(br, bc)) continue;  // a line reaching the edge is safe
-      const int8_t a = bb.at(ar, ac), b = bb.at(br, bc);
-      float w = 0.0f;
-      if (a == EMPTY && b == EMPTY) {
-        for (int t = 0; t < x.threatCount; t++) {
-          const Threat& h = x.threats[t];
-          if (!h.held && bb.cells[h.r * x.n + h.c] != HUMAN) continue;
-          if (!reaches(bb, h.r, h.c, ar, ac)) continue;
-          const float wb = reachWeight(x, bb, br, bc, t);
-          const float v = h.w < wb ? h.w : wb;
-          if (v > w) w = v;
-        }
-      } else if (a == HUMAN && b == HUMAN) {
-        for (int e = 0; e < 2; e++) {
-          const int sr = e == 0 ? ar : br, sc = e == 0 ? ac : bc;
-          // The piece that steps away must be free to move now.
-          int self = -1;
-          for (int t = 0; t < x.threatCount; t++)
-            if (!x.threats[t].held && x.threats[t].r == sr && x.threats[t].c == sc) self = t;
-          if (self < 0) continue;
-          bb.set(sr, sc, EMPTY);
-          const float wi = reachWeight(x, bb, sr, sc, self);
-          bb.set(sr, sc, HUMAN);
-          const float v = x.threats[self].w < wi ? x.threats[self].w : wi;
-          if (v > w) w = v;
-        }
-      }
-      const float v = static_cast<float>(len) * w * 0.8f;
-      if (risk) {
-        const float rv = w * 0.8f < 1.0f ? w * 0.8f : 1.0f;
-        for (int q = 0; q < len; q++) {
-          float& cell = risk[(r + dr * q) * x.n + (c + dc * q)];
-          if (rv > cell) cell = rv;
-        }
-      }
-      if (v > mx) mx = v;
-      sum += v;
-    }
-  }
-  return mx + 0.25f * sum;
+// The board the machine moves on: blocked squares (held origins, the pending target, the
+// reserved square) count as occupied.
+Board machineBoard(const RaceState& st) {
+  Board b = st.board;
+  for (int i = 0; i < b.n * b.n; i++)
+    if (st.blocked[i] && b.cells[i] == EMPTY) b.cells[i] = HUMAN;
+  return b;
 }
 
-float danger(const Ctx& x, Board bb) {
-  float mx = 0.0f, sum = 0.0f;
-  for (int t = 0; t < x.threatCount; t++) {
-    const Threat& h = x.threats[t];
-    const int i = h.r * x.n + h.c;
-    // A non-held threat whose piece is gone (captured by the move) no longer counts.
-    if (!h.held && bb.cells[i] != HUMAN) continue;
-    if (!h.held) bb.cells[i] = EMPTY;
-    const int best = bestCapture(bb, HUMAN, h.r, h.c);
-    if (!h.held) bb.cells[i] = HUMAN;
-    const float v = static_cast<float>(best) * h.w;
-    if (v > mx) mx = v;
-    sum += v;
-  }
-  const float two = danger2(x, bb);
-  return (two > mx ? two : mx) + 0.25f * sum;
-}
-
-// The read's danger per machine piece on bb (AiDebug): the largest weight of a threat that
-// captures it with one move, or of a two-move line it is in (danger2), at most 1.
-void pieceRisk(const Ctx& x, Board bb, float risk[]) {
-  for (int i = 0; i < MAX_N * MAX_N; i++) risk[i] = 0.0f;
-  for (int t = 0; t < x.threatCount; t++) {
-    const Threat& h = x.threats[t];
-    const int i = h.r * x.n + h.c;
-    if (!h.held && bb.cells[i] != HUMAN) continue;
-    if (!h.held) bb.cells[i] = EMPTY;
-    const float w = h.w < 1.0f ? h.w : 1.0f;
-    int d[MAX_N * MAX_N];
-    int caps[MAX_N * MAX_N];
-    const int k = dests(bb, h.r, h.c, d);
-    for (int j = 0; j < k; j++) {
-      bb.cells[d[j]] = HUMAN;
-      const int nc = capturesAt(bb, HUMAN, d[j] / bb.n, d[j] % bb.n, caps);
-      bb.cells[d[j]] = EMPTY;
-      for (int m = 0; m < nc; m++)
-        if (w > risk[caps[m]]) risk[caps[m]] = w;
-    }
-    if (!h.held) bb.cells[i] = HUMAN;
-  }
-  danger2(x, bb, risk);
-}
-
-float pressure(const Ctx& x, Board bb) {
-  int best = 0;
-  for (int i = 0; i < x.n * x.n; i++) {
-    if (bb.cells[i] != MACHINE) continue;
-    bb.cells[i] = EMPTY;
-    const int b = bestCapture(bb, MACHINE, i / x.n, i % x.n);
-    if (b > best) best = b;
-    bb.cells[i] = MACHINE;
-  }
-  return static_cast<float>(best);
-}
-
-float shape(const Ctx& x, const Board& bb) {
-  int adj = 0;
+float shapePoints(const Board& b) {
+  const int n = b.n;
+  const float denom = static_cast<float>(n - 1);
   float adv = 0.0f;
-  const float denom = static_cast<float>(x.n - 1);
-  for (int i = 0; i < x.n * x.n; i++) {
-    if (bb.cells[i] != MACHINE) continue;
-    const int r = i / x.n, c = i % x.n;
+  int adj = 0, edge = 0, pairs = 0;
+  for (int i = 0; i < n * n; i++) {
+    if (b.cells[i] != MACHINE) continue;
+    const int r = i / n, c = i % n;
     adv += static_cast<float>(r) / denom;
     for (int d = 0; d < 4; d++) {
       const int rr = r + DIR_R[d], cc = c + DIR_C[d];
-      if (bb.inside(rr, cc) && bb.at(rr, cc) == HUMAN) adj++;
+      if (b.inside(rr, cc) && b.at(rr, cc) == HUMAN) adj++;
     }
+    if (r == 0 || r == n - 1 || c == 0 || c == n - 1) edge++;
+    if (r + 1 < n && b.at(r + 1, c) == MACHINE) pairs++;
   }
-  return static_cast<float>(adj) * 8.0f + adv * 30.0f;
+  return adv * SHAPE_ADVANCE + static_cast<float>(adj) * SHAPE_ADJACENT + static_cast<float>(edge) * SHAPE_EDGE +
+         static_cast<float>(pairs) * SHAPE_PAIR;
 }
 
-float evalBoard(const Ctx& x, const Board& bb) {
-  return -danger(x, bb) * 80.0f * (1.0f - 0.5f * x.aggr) + pressure(x, bb) * (20.0f + 60.0f * x.aggr) +
-         x.aggr * shape(x, bb);
+// Sum of the gain (3.8) over the human lines of st. With riskAt (the nothing-safe score), a
+// line's gain is scaled by 1 - the largest risk of the machine pieces on its ends: a capture
+// that needs a machine piece the human is about to take does not count.
+float gainSum(const RaceState& st, const RaceTimes& t, const float* riskAt = nullptr) {
+  RaceLine lines[RACE_MAX_LINES];
+  const Board& b = st.board;
+  const int k = raceLines(b, HUMAN, lines);
+  float sum = 0.0f;
+  for (int i = 0; i < k; i++) {
+    const RaceLine& L = lines[i];
+    float g = raceGain(st, t, L);
+    if (riskAt && g > 0.0f) {
+      const int ends[2][2] = {{L.r - L.dr, L.c - L.dc}, {L.r + L.dr * L.len, L.c + L.dc * L.len}};
+      float r = 0.0f;
+      for (const auto& e : ends)
+        if (b.inside(e[0], e[1]) && b.at(e[0], e[1]) == MACHINE) r = fmax2(r, riskAt[e[0] * b.n + e[1]]);
+      g *= 1.0f - r;
+    }
+    sum += g;
+  }
+  return sum;
+}
+
+// (c) of 3.9: every threatened line is guarded in the order 3.7 picks.
+bool allGuarded(const RaceLineEval ev[], int k) {
+  for (int i = 0; i < k; i++)
+    if (ev[i].danger && !ev[i].guarded) return false;
+  return true;
+}
+
+// Least T_h of the two lines through the machine piece at (r,c) on st.
+float lineTimeAt(const RaceState& st, const RaceTimes& t, int r, int c) {
+  float th = RACE_INF;
+  for (int dir = 0; dir < 2; dir++)
+    th = fmin2(th, raceHumanTime(st, t, raceLineThrough(st.board, MACHINE, r, c, dir, 1 - dir)));
+  return th;
+}
+
+// raceDestTimes on a state already moved: before = st, after = st with (pr,pc) -> (dr,dc). The
+// rest of the old lines is read as it is; then after takes the human's reaction to the move
+// (reactAt, planned) and keeps it, and the destination's lines are read with it.
+void destTimes(const RaceState& before, RaceState& after, const RaceTimes& t, int pr, int pc, int dr, int dc,
+               float reactAt, const RaceMask& planned, float* thDest, float* thRest) {
+  const Board& b2 = after.board;
+  float dest = RACE_INF, rest = RACE_INF;
+  for (int dir = 0; dir < 2; dir++) {
+    const int ldr = dir == 0 ? 0 : 1, ldc = dir == 0 ? 1 : 0;
+    for (int side = -1; side <= 1; side += 2) {
+      const int nr = pr + ldr * side, nc = pc + ldc * side;
+      if (!b2.inside(nr, nc) || before.board.at(nr, nc) != MACHINE || b2.at(nr, nc) != MACHINE) continue;
+      rest = fmin2(rest, raceHumanTime(after, t, raceLineThrough(b2, MACHINE, nr, nc, ldr, ldc)));
+    }
+  }
+  after.reactAt = reactAt;
+  after.planned = planned;
+  for (int dir = 0; dir < 2; dir++) {
+    const int ldr = dir == 0 ? 0 : 1, ldc = dir == 0 ? 1 : 0;
+    dest = fmin2(dest, raceHumanTime(after, t, raceLineThrough(b2, MACHINE, dr, dc, ldr, ldc)));
+  }
+  *thDest = dest;
+  *thRest = rest;
+}
+
+// A machine line on the board as it is and its T_h (only lines the human can close), small to
+// keep the ESP32 think stack low.
+struct OpenLine {
+  int8_t r, c, dr, dc, len;
+  float th;
+};
+
+struct Ctx {
+  const Snapshot* s;
+  RaceTimes t;
+  float aggr;
+  bool fork;
+  uint32_t hash;
+  OpenLine open[RACE_MAX_LINES];
+  int openCount;
+  RaceMask planned;  // ends of the threatened lines on the board as it is
+};
+
+bool onLine(const OpenLine& L, int r, int c) {
+  for (int k = 0; k < L.len; k++)
+    if (L.r + L.dr * k == r && L.c + L.dc * k == c) return true;
+  return false;
+}
+
+bool isEnd(const OpenLine& L, int r, int c) {
+  return (r == L.r - L.dr && c == L.c - L.dc) || (r == L.r + L.dr * L.len && c == L.c + L.dc * L.len);
+}
+
+// One candidate: the moved piece (index into s.pieces, -1 for "stay") and its destination.
+struct Cand {
+  int index;  // candidate number (0 = stay)
+  int piece;
+  int toR, toC;
+};
+
+// The move part of a candidate (3.9): start of pulling, arrival D, (a) and (b), and st2 = the
+// state after it (captures removed, head busy until D). For "stay", st2 = st.
+struct MoveInfo {
+  float start, arrival;
+  float reserveAt;  // when the piece takes its destination square (the drag reserves it)
+  int caps;
+  float thOrig;  // least T_h of the moved piece's lines before it starts
+  bool pathOpen;  // no human piece can block the drag path before the drag gets there
+  bool safeAB;    // (a), (b) and the path
+};
+
+// When a move starts to count for a line on the board as it is: when the piece takes the line's
+// end, or else when it arrives.
+float takesEffect(const OpenLine& o, const Cand& c, const MoveInfo& mi) {
+  return isEnd(o, c.toR, c.toC) ? mi.reserveAt : mi.arrival;
+}
+
+// Whether the drag (fr,fc) -> (tr,tc), starting at `start` and entering one square per
+// 1/dragSpeed, gets through: every square of its path that is an end of a threatened line on the
+// board as it is (where the human is heading) is entered at least margin before a human piece
+// can be put on it in one move (the placement interval does not matter: a pending placement
+// claims the square at once). A piece put there stops the drag: the machine piece stays where it
+// is, with its cooldown.
+bool pathOpen(const Ctx& x, const RaceState& st, int fr, int fc, int tr, int tc, float start) {
+  const RaceTimes& t = x.t;
+  const int n = st.board.n;
+  const int dr = tr > fr ? 1 : tr < fr ? -1 : 0, dc = tc > fc ? 1 : tc < fc ? -1 : 0;
+  int i = 0;
+  for (int r = fr + dr, c = fc + dc;; r += dr, c += dc, i++) {
+    bool end = false;
+    for (int k = 0; k < x.openCount && !end; k++) end = x.open[k].th < RACE_DANGER_MS && isEnd(x.open[k], r, c);
+    if (end) {
+      const int sq = r * n + c;
+      const float enter = start + static_cast<float>(i) / t.dragSpeed * 1000.0f;
+      for (int hi = 0; hi < st.hCount; hi++) {
+        if (!st.h[hi].alive || st.h[hi].pending || !st.h[hi].reach1.has(sq)) continue;
+        const float e = raceHumanPlace(st, t, hi, sq);
+        if (!raceInf(e) && e < enter + t.margin) return false;  // put there (pending or not)
+      }
+    }
+    if (r == tr && c == tc) return true;
+  }
+}
+
+MoveInfo applyCandidate(const Ctx& x, const RaceState& st, const Cand& c, RaceState& st2) {
+  MoveInfo mi{0.0f, 0.0f, 0.0f, 0, RACE_INF, true, true};
+  st2 = st;
+  if (c.piece < 0) return mi;
+  const RaceTimes& t = x.t;
+  const PieceView& q = x.s->pieces[c.piece];
+  mi.start = raceTravel(t, q.r, q.c, st.headR, st.headC) + t.engage;
+  mi.arrival = raceArrival(t, q.r, q.c, c.toR, c.toC, mi.start);
+  mi.thOrig = lineTimeAt(st, t, q.r, q.c);
+  const bool safeA = atLeast(mi.thOrig, mi.start + t.margin);
+  mi.caps = raceMoveMachine(st2, t, q.r, q.c, c.toR, c.toC, mi.arrival);
+  float thDest, thRest;
+  destTimes(st, st2, t, q.r, q.c, c.toR, c.toC, mi.start + t.humanReact, x.planned, &thDest, &thRest);
+  const bool safeB = atLeast(thDest, mi.arrival + t.machineCooldown + t.react + t.engage + t.margin) &&
+                     atLeast(thRest, mi.start + t.margin);
+  // The other lines on the board as it is stay as they are until the move takes effect: the
+  // arrival, or for a line whose end the piece fills, the moment it takes that square (the drag
+  // reserves each square as it enters it). (c) looks at the board after the move only.
+  bool safeOthers = true;
+  const int dist = (c.toR > q.r ? c.toR - q.r : q.r - c.toR) + (c.toC > q.c ? c.toC - q.c : q.c - c.toC);
+  mi.reserveAt = mi.start + static_cast<float>(dist - 1) / t.dragSpeed * 1000.0f;
+  for (int i = 0; i < x.openCount && safeOthers; i++) {
+    const OpenLine& o = x.open[i];
+    if (onLine(o, q.r, q.c)) continue;  // (a) and (b)
+    if (o.th < takesEffect(o, c, mi) + t.margin) safeOthers = false;
+  }
+  // The piece must also get through: a human piece put on a square of the drag path before the
+  // drag enters it stops the piece where it is (with its cooldown), and nothing above holds.
+  mi.pathOpen = pathOpen(x, st, q.r, q.c, c.toR, c.toC, mi.start);
+  mi.safeAB = safeA && safeB && safeOthers && mi.pathOpen;
+  return mi;
+}
+
+float timePenalty(const Cand& c, const MoveInfo& mi, float extra) {
+  return c.piece < 0 ? 0.0f : mi.arrival / 1000.0f * 4.0f + extra;
+}
+
+float attackPoints(const Ctx& x, const RaceState& st2, const MoveInfo& mi, const float* riskAt = nullptr) {
+  return static_cast<float>(mi.caps) * 100.0f + gainSum(st2, x.t, riskAt) * (40.0f + 40.0f * x.aggr);
+}
+
+// Score of a safe candidate (3.9), without the fork penalty.
+float safeScore(const Ctx& x, const Cand& c, const MoveInfo& mi, const RaceState& st2) {
+  return attackPoints(x, st2, mi) + x.aggr * shapePoints(st2.board) - timePenalty(c, mi, 2.0f);
+}
+
+// The part of a candidate's captures (in pieces) that may not happen: a captured run whose far
+// end (the machine piece it is caught against) is in a line on the board as it is that the
+// human closes before the capturing piece arrives counts as lost with the risk of 3.7 (the
+// arrival as save).
+float capturesLost(const Ctx& x, const RaceState& st, const Cand& c, const MoveInfo& mi) {
+  if (c.piece < 0 || mi.caps == 0) return 0.0f;
+  const RaceTimes& t = x.t;
+  const PieceView& q = x.s->pieces[c.piece];
+  Board b = st.board;
+  for (int i = 0; i < st.hCount; i++)
+    if (st.h[i].alive && st.h[i].pending) b.set(st.h[i].r, st.h[i].c, EMPTY);  // not landed yet
+  b.set(q.r, q.c, EMPTY);
+  b.set(c.toR, c.toC, MACHINE);
+  float lost = 0.0f;
+  for (int d = 0; d < 4; d++) {
+    int len = 0, r = c.toR + DIR_R[d], cc = c.toC + DIR_C[d];
+    while (b.inside(r, cc) && b.at(r, cc) == HUMAN) {
+      len++;
+      r += DIR_R[d];
+      cc += DIR_C[d];
+    }
+    if (len == 0 || !b.inside(r, cc) || b.at(r, cc) != MACHINE) continue;
+    float ro = 0.0f;
+    for (int i = 0; i < x.openCount; i++) {
+      const OpenLine& o = x.open[i];
+      if (!onLine(o, r, cc) || onLine(o, q.r, q.c) || o.th >= mi.arrival + t.margin) continue;
+      ro = fmax2(ro, clamp01(0.5f + (mi.arrival + t.margin - o.th) / 2000.0f));
+    }
+    lost += static_cast<float>(len) * ro;
+  }
+  return lost;
+}
+
+// Score when no candidate is safe (3.9): the risk of each machine piece (the larger of its
+// lines') counts against it. A moved piece that cannot start before its old line closes ((a)
+// fails) carries the risk of that line too, and so do the pieces of a line on the board as it is
+// that closes before the move takes effect (the risk of 3.7 with the move's effect as save).
+// "Stay" measures its saves as of the next read (lead = the read interval). The gain of a human
+// line counts only as much as the machine pieces on its ends are not at risk.
+float unsafeScore(const Ctx& x, const RaceState& st, const Cand& c, const MoveInfo& mi, const RaceState& st2,
+                  RaceLineEval ev[]) {
+  const RaceTimes& t = x.t;
+  const int k = raceAssess(st2, t, ev, c.piece < 0 ? t.readInterval : 0.0f);
+  float riskAt[MAX_N * MAX_N];
+  racePieceRisk(st2.board, ev, k, riskAt);
+  const int n = st2.board.n;
+  if (c.piece >= 0 && (!atLeast(mi.thOrig, mi.start + t.margin) || !mi.pathOpen)) {
+    // (a) fails: the risk of the old line with the start as save; the path can be blocked: the
+    // piece stays in its old line, stuck there (save INF).
+    float ra = 0.0f;
+    if (!atLeast(mi.thOrig, mi.start + t.margin)) ra = clamp01(0.5f + (mi.start + t.margin - mi.thOrig) / 2000.0f);
+    if (!mi.pathOpen) ra = fmax2(ra, clamp01((2500.0f - mi.thOrig) / 1000.0f));
+    float& cell = riskAt[c.toR * n + c.toC];
+    if (st2.board.cells[c.toR * n + c.toC] == MACHINE) cell = fmax2(cell, ra);
+  }
+  if (c.piece >= 0) {
+    const PieceView& q = x.s->pieces[c.piece];
+    for (int i = 0; i < x.openCount; i++) {
+      const OpenLine& o = x.open[i];
+      if (onLine(o, q.r, q.c)) continue;
+      const float effect = takesEffect(o, c, mi);
+      if (o.th >= effect + t.margin) continue;
+      const float ro = clamp01(0.5f + (effect + t.margin - o.th) / 2000.0f);
+      for (int k2 = 0; k2 < o.len; k2++) {
+        const int sq = (o.r + o.dr * k2) * n + (o.c + o.dc * k2);
+        if (st2.board.cells[sq] == MACHINE) riskAt[sq] = fmax2(riskAt[sq], ro);
+      }
+    }
+  }
+  float risk = 0.0f;
+  for (int i = 0; i < n * n; i++)
+    if (st2.board.cells[i] == MACHINE) risk += riskAt[i];
+  return attackPoints(x, st2, mi, riskAt) - capturesLost(x, st, c, mi) * 100.0f - risk * 100.0f -
+         timePenalty(c, mi, 0.0f);
+}
+
+// A human threat move of 3.9: piece index hi to square sq at time e.
+struct Threat {
+  int hi, sq;
+  float e;
+};
+
+// Up to FORK_THREATS threat moves on st2, earliest e first (then piece order, then dests order).
+// Not inlined (nor forkBroken): their frames then add to the think stack only during the fork
+// check, not under every candidate's assessment.
+__attribute__((noinline)) int threatMoves(const RaceState& st2, const RaceTimes& t, Threat out[]) {
+  const Board& b = st2.board;
+  const int n = b.n;
+  RaceMask ends, onEnd, block;
+  ends.clear();
+  onEnd.clear();
+  block.clear();
+  {
+    RaceLine lines[RACE_MAX_LINES];
+    const int k = raceLines(b, MACHINE, lines);
+    const Board mb = machineBoard(st2);
+    for (int i = 0; i < k; i++) {
+      const RaceLine& L = lines[i];
+      const int ar = L.r - L.dr, ac = L.c - L.dc, br = L.r + L.dr * L.len, bc = L.c + L.dc * L.len;
+      if (!b.inside(ar, ac) || !b.inside(br, bc)) continue;  // a line on the edge cannot be closed
+      const int ends2[2] = {ar * n + ac, br * n + bc};
+      for (int e : ends2) {
+        if (b.cells[e] == EMPTY && !st2.blocked[e]) ends.set(e);  // (i)
+        if (b.cells[e] == HUMAN) onEnd.set(e);                     // (ii)
+      }
+      const float th = raceHumanTime(st2, t, L);
+      if (raceInf(th) || th >= RACE_DANGER_MS) continue;
+      for (int q = 0; q < L.len; q++) {  // (iii)
+        int d[MAX_N * MAX_N];
+        const int kd = dests(mb, L.r + L.dr * q, L.c + L.dc * q, d);
+        for (int j = 0; j < kd; j++) block.set(d[j]);
+      }
+    }
+  }
+  // While a piece is held (not pending) nothing else can be lifted: only it moves.
+  int heldIdx = -1;
+  for (int i = 0; i < st2.hCount; i++)
+    if (st2.h[i].alive && st2.h[i].held) heldIdx = i;
+  int count = 0;
+  for (int hi = 0; hi < st2.hCount; hi++) {
+    const RaceHuman& h = st2.h[hi];
+    if (!h.alive || h.pending || (heldIdx >= 0 && hi != heldIdx)) continue;
+    const bool hOnEnd = !h.held && onEnd.has(h.r * n + h.c);
+    int d[MAX_N * MAX_N];
+    const int kd = dests(b, h.r, h.c, d);
+    for (int j = 0; j < kd; j++) {
+      const int sq = d[j];
+      if (sq == st2.reserved || !h.reach1.has(sq)) continue;
+      if (!ends.has(sq) && !hOnEnd && !block.has(sq)) continue;
+      const float e0 = raceHumanPlace(st2, t, hi, sq);
+      if (raceInf(e0)) continue;
+      const float e = fmax2(e0, st2.firstPlace);
+      // Insert after the threats with e <= this one; drop the last beyond FORK_THREATS.
+      int pos = count;
+      while (pos > 0 && out[pos - 1].e > e) pos--;
+      if (pos >= FORK_THREATS) continue;
+      const int last = count < FORK_THREATS ? count : FORK_THREATS - 1;
+      for (int m = last; m > pos; m--) out[m] = out[m - 1];
+      out[pos] = Threat{hi, sq, e};
+      if (count < FORK_THREATS) count++;
+    }
+  }
+  return count;
+}
+
+// Whether a threat move breaks candidate c: on the board after c and the threat move (the human
+// clock advanced by e), some threatened line cannot be guarded (3.9). A threat move that captures
+// at once is a line already found threatened and guarded after c, so it does not count. st3 is
+// scratch (the state after c is rebuilt in it for each threat move, to keep one state off the
+// stack).
+__attribute__((noinline)) bool forkBroken(const Ctx& x, const RaceState& st, const Cand& c, RaceState& st3,
+                                          RaceLineEval ev[]) {
+  const RaceTimes& t = x.t;
+  applyCandidate(x, st, c, st3);
+  Threat th[FORK_THREATS];
+  const int k = threatMoves(st3, t, th);
+  const int n = st3.board.n;
+  for (int i = 0; i < k; i++) {
+    if (i > 0) applyCandidate(x, st, c, st3);
+    RaceHuman& h = st3.h[th[i].hi];
+    const int fr = h.r, fc = h.c, tr = th[i].sq / n, tc = th[i].sq % n;
+    const float e = th[i].e;
+    if (h.held) {
+      st3.blocked[fr * n + fc] = false;
+    } else {
+      st3.board.set(fr, fc, EMPTY);
+    }
+    st3.board.set(tr, tc, HUMAN);
+    int caps[MAX_N * MAX_N];
+    if (capturesAt(st3.board, HUMAN, tr, tc, caps) > 0) continue;
+    h.r = tr;
+    h.c = tc;
+    h.held = false;
+    h.pending = false;
+    h.ready = t.humanCooldown;
+    h.holdLeft = RACE_INF;
+    for (int j = 0; j < st3.hCount; j++) {
+      RaceHuman& o = st3.h[j];
+      if (j == th[i].hi || !o.alive) continue;
+      // A pending placement lands before the threat move (it is on st2's board already).
+      o.pending = false;
+      o.ready = fmax2(0.0f, o.ready - e);
+      if (o.held && !raceInf(o.holdLeft)) o.holdLeft -= e;
+    }
+    st3.gap = t.humanInterval;
+    st3.firstPlace = st3.gap;
+    st3.firstLift = 0.0f;
+    st3.headFree = fmax2(0.0f, st3.headFree - e);
+    st3.reactAt = fmax2(0.0f, st3.reactAt - e);
+    for (int q = 0; q < n * n; q++) st3.mReady[q] = fmax2(0.0f, st3.mReady[q] - e);
+    raceRebuild(st3, fr, fc, tr, tc);
+    const int m = raceAssess(st3, t, ev);
+    if (!allGuarded(ev, m)) return true;
+  }
+  return false;
+}
+
+// Calls f(cand) for "stay" and every legal move of a cooled-down machine piece, in order.
+template <typename F>
+void forEachCandidate(const Snapshot& s, const RaceState& st, F f) {
+  f(Cand{0, -1, -1, -1});
+  const Board mb = machineBoard(st);
+  const int n = mb.n;
+  int index = 1;
+  for (int i = 0; i < s.count; i++) {
+    const PieceView& q = s.pieces[i];
+    if (!q.alive || q.held || q.side != MACHINE || s.clockMs < q.cooldownUntil) continue;
+    if (!mb.inside(q.r, q.c) || mb.at(q.r, q.c) != MACHINE) continue;
+    int d[MAX_N * MAX_N];
+    const int k = dests(mb, q.r, q.c, d);
+    for (int j = 0; j < k; j++) f(Cand{index++, i, d[j] / n, d[j] % n});
+  }
+}
+
+struct Ranked {
+  Cand c;
+  float score;
+  uint32_t hash;
+  float penalty;
+};
+
+AiMove toMove(const Snapshot& s, const Cand& c, float score) {
+  if (c.piece < 0) return AiMove{true, -1, -1, -1, score};
+  return AiMove{false, s.pieces[c.piece].id, c.toR, c.toC, score};
+}
+
+AiCandidate toCandidate(const Snapshot& s, const Cand& c, bool safe) {
+  AiCandidate a{};
+  a.none = c.piece < 0;
+  a.pieceId = c.piece < 0 ? -1 : s.pieces[c.piece].id;
+  a.toR = c.toR;
+  a.toC = c.toC;
+  a.safe = safe;
+  return a;
+}
+
+AiMove run(const Snapshot& s, const Params& p, AiDebug* dbg, AiCandidate* list, int cap, int* listCount) {
+  Ctx x;
+  x.s = &s;
+  x.t = raceTimes(s, p);
+  x.aggr = p.aggression;
+  x.fork = p.level == Level::Hard;
+  x.hash = snapshotHash(s);
+  const RaceTimes& t = x.t;
+
+  RaceState st;
+  raceInit(st, s, t);
+  if (!p.readLift) {
+    // Held pieces are not read (their origins stay closed to the machine).
+    for (int i = 0; i < st.hCount; i++) {
+      if (!st.h[i].held) continue;
+      st.h[i].alive = false;
+      st.h[i].reach1.clear();
+      st.h[i].reach2.clear();
+    }
+  }
+  RaceState st2;
+  RaceLineEval ev[RACE_MAX_LINES];
+  const int n = st.board.n;
+
+  // What the read sees on the board as it is ("stay"'s (c)): staying guards a line only if the
+  // guard can still start at the next read, so every save counts the read interval on top.
+  const int k0 = raceAssess(st, t, ev, t.readInterval);
+  if (dbg) {
+    racePieceRisk(st.board, ev, k0, dbg->pieceRisk);
+    for (int i = n * n; i < MAX_N * MAX_N; i++) dbg->pieceRisk[i] = 0.0f;
+    dbg->lineCount = k0;
+    for (int i = 0; i < k0; i++) {
+      const RaceLine& L = ev[i].line;
+      dbg->lines[i] = AiLineRisk{L.r, L.c, L.dr, L.dc, L.len, ev[i].risk};
+    }
+    dbg->candidates = 0;
+    dbg->safeCandidates = 0;
+    dbg->forkChecked = 0;
+    dbg->forkPenalized = 0;
+  }
+  const bool staySafe = allGuarded(ev, k0);
+  racePlanned(st.board, ev, k0, &x.planned);
+  x.openCount = 0;
+  for (int i = 0; i < k0; i++)
+    if (!raceInf(ev[i].th)) {
+      const RaceLine& L = ev[i].line;
+      x.open[x.openCount++] = OpenLine{static_cast<int8_t>(L.r), static_cast<int8_t>(L.c), static_cast<int8_t>(L.dr),
+                                       static_cast<int8_t>(L.dc), static_cast<int8_t>(L.len), ev[i].th};
+    }
+
+  // Pass 1: safety of every candidate, and the best FORK_TOP + 1 safe ones by score.
+  Ranked top[FORK_TOP + 1];
+  int topCount = 0, safeCount = 0, total = 0;
+  forEachCandidate(s, st, [&](const Cand& c) {
+    total++;
+    bool safe;
+    float score = 0.0f;
+    if (c.piece < 0) {
+      safe = staySafe;
+      if (safe) score = safeScore(x, c, MoveInfo{0.0f, 0.0f, 0.0f, 0, RACE_INF, true, true}, st);
+    } else {
+      const MoveInfo mi = applyCandidate(x, st, c, st2);
+      safe = mi.safeAB;
+      if (safe) {
+        const int k = raceAssess(st2, t, ev);
+        safe = allGuarded(ev, k);
+      }
+      if (safe) score = safeScore(x, c, mi, st2);
+    }
+    if (list && c.index < cap) list[c.index] = toCandidate(s, c, safe);
+    if (!safe) return;
+    safeCount++;
+    if (list && c.index < cap) list[c.index].score = score;
+    const uint32_t h = candidateHash(x.hash, c.index);
+    int pos = topCount;
+    while (pos > 0 && beats(score, h, top[pos - 1].score, top[pos - 1].hash)) pos--;
+    if (pos > FORK_TOP) return;
+    const int last = topCount < FORK_TOP + 1 ? topCount : FORK_TOP;
+    for (int m = last; m > pos; m--) top[m] = top[m - 1];
+    top[pos] = Ranked{c, score, h, 0.0f};
+    if (topCount < FORK_TOP + 1) topCount++;
+  });
+  if (dbg) {
+    dbg->candidates = total;
+    dbg->safeCandidates = safeCount;
+  }
+  if (listCount) *listCount = total < cap ? total : cap;
+
+  if (safeCount > 0) {
+    // Fork penalty (Hard): the top FORK_TOP safe candidates against the human's threat moves.
+    if (x.fork) {
+      const int checks = topCount < FORK_TOP ? topCount : FORK_TOP;
+      for (int i = 0; i < checks; i++) {
+        if (dbg) dbg->forkChecked++;
+        if (forkBroken(x, st, top[i].c, st2, ev)) {
+          top[i].penalty = FORK_PENALTY;
+          if (dbg) dbg->forkPenalized++;
+        }
+      }
+    }
+    int best = 0;
+    for (int i = 1; i < topCount; i++)
+      if (beats(top[i].score - top[i].penalty, top[i].hash, top[best].score - top[best].penalty, top[best].hash))
+        best = i;
+    if (list) {
+      // Every safe candidate contends; the penalty applies to the checked ones.
+      for (int i = 0; i < *listCount; i++) {
+        if (!list[i].safe) continue;
+        list[i].contending = true;
+        for (int j = 0; j < topCount; j++)
+          if (top[j].c.index == i) {
+            list[i].penalty = top[j].penalty;
+            list[i].score = top[j].score - top[j].penalty;
+          }
+      }
+    }
+    return toMove(s, top[best].c, top[best].score - top[best].penalty);
+  }
+
+  // Pass 2: nothing is safe; the least expected loss with the attack kept.
+  bool have = false;
+  Cand bestC{0, -1, -1, -1};
+  float bestS = 0.0f;
+  uint32_t bestH = 0;
+  forEachCandidate(s, st, [&](const Cand& c) {
+    const MoveInfo mi = applyCandidate(x, st, c, st2);
+    const float score = unsafeScore(x, st, c, mi, st2, ev);
+    const uint32_t h = candidateHash(x.hash, c.index);
+    if (list && c.index < cap) {
+      list[c.index].contending = true;
+      list[c.index].score = score;
+    }
+    if (!have || beats(score, h, bestS, bestH)) {
+      have = true;
+      bestC = c;
+      bestS = score;
+      bestH = h;
+    }
+  });
+  return toMove(s, bestC, bestS);
 }
 
 }  // namespace
 
-AiMove think(const Snapshot& s, const Params& p, AiDebug* dbg) {
-  Ctx x;
-  x.n = s.board.n;
-  x.aggr = p.aggression;
-  x.threatCount = 0;
+AiMove think(const Snapshot& s, const Params& p, AiDebug* dbg) { return run(s, p, dbg, nullptr, 0, nullptr); }
 
-  float wReady = 0.0f, wCool = 0.0f;
-  switch (p.level) {
-    case Level::Easy:
-      break;
-    case Level::Normal:
-      wReady = 0.35f;
-      break;
-    case Level::Hard:
-      wReady = 1.0f;
-      wCool = 0.7f;
-      break;
-  }
-
-  // Human threats, in id order.
-  for (int i = 0; i < s.count; i++) {
-    const PieceView& q = s.pieces[i];
-    if (!q.alive || q.side != HUMAN) continue;
-    if (q.held) {
-      if (p.readLift) x.threats[x.threatCount++] = Threat{q.r, q.c, 1.6f, true};
-      continue;
-    }
-    const uint32_t rem = q.cooldownUntil > s.clockMs ? q.cooldownUntil - s.clockMs : 0;
-    if (rem == 0 && wReady > 0.0f) {
-      x.threats[x.threatCount++] = Threat{q.r, q.c, wReady, false};
-    } else if (rem > 0 && wCool > 0.0f) {
-      // The single head may be busy for a while, so a piece still cooling down counts too,
-      // less the longer it has to wait.
-      x.threats[x.threatCount++] = Threat{q.r, q.c, rem <= 1500 ? wCool : 0.5f * wCool, false};
-    }
-  }
-
-  const Board& b = s.board;
-  AiMove best{true, -1, -1, -1, evalBoard(x, b)};
-  if (dbg) {
-    // The current read has no safety test; a candidate counts as safe when its danger is 0.
-    pieceRisk(x, b, dbg->pieceRisk);
-    RaceLine lines[RACE_MAX_LINES];
-    dbg->lineCount = raceLines(b, MACHINE, lines);
-    for (int i = 0; i < dbg->lineCount; i++) {
-      const RaceLine& L = lines[i];
-      float r = 0.0f;
-      for (int q = 0; q < L.len; q++) {
-        const float v = dbg->pieceRisk[(L.r + L.dr * q) * x.n + (L.c + L.dc * q)];
-        if (v > r) r = v;
-      }
-      dbg->lines[i] = AiLineRisk{L.r, L.c, L.dr, L.dc, L.len, r};
-    }
-    dbg->candidates = 1;
-    dbg->safeCandidates = danger(x, b) == 0.0f ? 1 : 0;
-  }
-  // Destinations: held pieces' origins and the pending target are occupied for the machine
-  // (plan 2026-10-31 3.1); the evaluation still sees them empty.
-  Board bm = b;
-  for (int i = 0; i < s.heldCount; i++) {
-    const int id = s.heldIds[i];
-    if (id < 1 || id > s.count) continue;
-    const PieceView& h = s.pieces[id - 1];
-    if (bm.inside(h.r, h.c) && bm.at(h.r, h.c) == EMPTY) bm.set(h.r, h.c, HUMAN);
-  }
-  if (s.pending && bm.inside(s.pendingR, s.pendingC) && bm.at(s.pendingR, s.pendingC) == EMPTY)
-    bm.set(s.pendingR, s.pendingC, HUMAN);
-  const float engageS = static_cast<float>(p.engageMs) / 1000.0f;
-
-  for (int i = 0; i < s.count; i++) {
-    const PieceView& q = s.pieces[i];
-    if (!q.alive || q.held || q.side != MACHINE || s.clockMs < q.cooldownUntil) continue;
-    int d[MAX_N * MAX_N];
-    const int k = dests(bm, q.r, q.c, d);
-    for (int j = 0; j < k; j++) {
-      const int tr = d[j] / x.n, tc = d[j] % x.n;
-      Board b2 = b;
-      b2.set(q.r, q.c, EMPTY);
-      b2.set(tr, tc, MACHINE);
-      int caps[MAX_N * MAX_N];
-      const int nc = capturesAt(b2, MACHINE, tr, tc, caps);
-      for (int m = 0; m < nc; m++) b2.cells[caps[m]] = EMPTY;
-      const int dist = std::abs(tr - q.r) + std::abs(tc - q.c);
-      const float dr = static_cast<float>(q.r) - s.headR, dc = static_cast<float>(q.c) - s.headC;
-      const float tm = std::sqrt(dr * dr + dc * dc) / p.freeSpeed + engageS +
-                       static_cast<float>(dist) / p.dragSpeed;
-      const float sc = static_cast<float>(nc) * 100.0f + evalBoard(x, b2) - tm * 4.0f - 2.0f;
-      if (dbg) {
-        dbg->candidates++;
-        if (danger(x, b2) == 0.0f) dbg->safeCandidates++;
-      }
-      if (sc > best.score + 0.01f) best = AiMove{false, q.id, tr, tc, sc};
-    }
-  }
-  return best;
+int thinkCandidates(const Snapshot& s, const Params& p, AiCandidate out[], int cap) {
+  int count = 0;
+  run(s, p, nullptr, out, cap, &count);
+  return count;
 }

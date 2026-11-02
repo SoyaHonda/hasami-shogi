@@ -1,7 +1,9 @@
 #include <unity.h>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include "HumanBot.h"
+#include "RaceTime.h"
 #include "SimDriver.h"
 
 void setUp() {}
@@ -369,6 +371,363 @@ void test_race3_three_moves() {
   }
 }
 
+// ---- Traps A-D in real time against the machine (plan 2026-10-31 section 1 and 3.13).
+
+// A human that plays the traps as fast as the rules allow (one piece in hand, placements 1 s
+// apart, holding each piece humanMoveMs): a capture in one move, else trap A (two pieces close
+// both empty ends of a machine line), trap C (one end steps away and another piece steps in), trap
+// B (one end steps away and comes back after its cooldown), trap D (a piece still cooling down
+// that reaches the open end of a half-closed line moves the moment it can). Nothing else: the
+// machine loses a piece only to a trap.
+struct Trapper {
+  struct Step {
+    int fr, fc, tr, tc;
+    uint32_t notBefore;  // game clock
+  };
+  Step q[2];
+  int qn = 0;
+  bool holding = false;
+  uint32_t liftClock = 0;
+  int fromR = -1, fromC = -1, toR = -1, toC = -1;
+  int traps = 0;  // trap sequences started
+
+  static bool ready(const Game& g, const PieceView& p) { return p.cooldownUntil <= g.clockMs(); }
+
+  static const PieceView* humanAt(const Game& g, int r, int c) {
+    for (int i = 0; i < g.pieceCount(); i++) {
+      const PieceView& p = g.pieces()[i];
+      if (p.alive && !p.held && p.side == HUMAN && p.r == r && p.c == c) return &p;
+    }
+    return nullptr;
+  }
+
+  // Whether (r,c) reaches the empty square (tr,tc) in one straight move on b.
+  static bool reaches(const Board& b, int r, int c, int tr, int tc) {
+    if ((r == tr) == (c == tc) || !b.inside(tr, tc) || b.at(tr, tc) != EMPTY) return false;
+    const int dr = tr > r ? 1 : tr < r ? -1 : 0, dc = tc > c ? 1 : tc < c ? -1 : 0;
+    for (int rr = r + dr, cc = c + dc; rr != tr || cc != tc; rr += dr, cc += dc)
+      if (b.at(rr, cc) != EMPTY) return false;
+    return true;
+  }
+
+  void queue2(const Step& a, const Step& b) {
+    q[0] = a;
+    q[1] = b;
+    qn = 2;
+    traps++;
+  }
+
+  // Picks the next sequence (nothing held, nothing pending, queue empty).
+  void plan(const Game& g) {
+    Board b = g.boardWithReserve();
+    const int n = b.n;
+    const uint32_t now = g.clockMs();
+    // A capture in one move.
+    for (int i = 0; i < g.pieceCount(); i++) {
+      const PieceView& h = g.pieces()[i];
+      if (!h.alive || h.held || h.side != HUMAN || !ready(g, h)) continue;
+      int d[MAX_N * MAX_N];
+      const int k = dests(b, h.r, h.c, d);
+      b.set(h.r, h.c, EMPTY);
+      for (int j = 0; j < k; j++) {
+        int caps[MAX_N * MAX_N];
+        b.cells[d[j]] = HUMAN;
+        const int nc = capturesAt(b, HUMAN, d[j] / n, d[j] % n, caps);
+        b.cells[d[j]] = EMPTY;
+        if (nc > 0) {
+          q[0] = Step{h.r, h.c, d[j] / n, d[j] % n, 0};
+          qn = 1;
+          return;
+        }
+      }
+      b.set(h.r, h.c, HUMAN);
+    }
+    RaceLine lines[RACE_MAX_LINES];
+    const int k = raceLines(b, MACHINE, lines);
+    for (int li = 0; li < k; li++) {
+      const RaceLine& L = lines[li];
+      const int e[2][2] = {{L.r - L.dr, L.c - L.dc}, {L.r + L.dr * L.len, L.c + L.dc * L.len}};
+      if (!b.inside(e[0][0], e[0][1]) || !b.inside(e[1][0], e[1][1])) continue;
+      const int8_t ca = b.at(e[0][0], e[0][1]), cb = b.at(e[1][0], e[1][1]);
+      if (ca == EMPTY && cb == EMPTY) {
+        // Trap A: two different ready pieces, one per end.
+        for (int first = 0; first < 2; first++) {
+          const int* A = e[first];
+          const int* B = e[1 - first];
+          for (int i = 0; i < g.pieceCount(); i++) {
+            const PieceView& h1 = g.pieces()[i];
+            if (!h1.alive || h1.held || h1.side != HUMAN || !ready(g, h1) || !reaches(b, h1.r, h1.c, A[0], A[1])) continue;
+            for (int j = 0; j < g.pieceCount(); j++) {
+              const PieceView& h2 = g.pieces()[j];
+              if (j == i || !h2.alive || h2.held || h2.side != HUMAN) continue;
+              if (h2.cooldownUntil > now + 1000 || !reaches(b, h2.r, h2.c, B[0], B[1])) continue;
+              queue2(Step{h1.r, h1.c, A[0], A[1], 0}, Step{h2.r, h2.c, B[0], B[1], h2.cooldownUntil});
+              return;
+            }
+          }
+        }
+      } else if (ca == HUMAN && cb == HUMAN) {
+        for (int side = 0; side < 2; side++) {
+          const PieceView* v = humanAt(g, e[side][0], e[side][1]);
+          if (!v || !ready(g, *v)) continue;
+          const int vr = v->r, vc = v->c;
+          int d[MAX_N * MAX_N];
+          const int kd = dests(b, vr, vc, d);
+          // Trap C: another ready piece steps into v's square after v steps aside.
+          for (int j = 0; j < kd; j++) {
+            const int sr = d[j] / n, sc = d[j] % n;
+            Board b2 = b;
+            b2.set(vr, vc, EMPTY);
+            b2.set(sr, sc, HUMAN);
+            for (int i = 0; i < g.pieceCount(); i++) {
+              const PieceView& w = g.pieces()[i];
+              if (&w == v || !w.alive || w.held || w.side != HUMAN || !ready(g, w)) continue;
+              if (!reaches(b2, w.r, w.c, vr, vc)) continue;
+              queue2(Step{vr, vc, sr, sc, 0}, Step{w.r, w.c, vr, vc, 0});
+              return;
+            }
+          }
+          // Trap B: v steps aside and comes back after its cooldown.
+          if (kd > 0) {
+            const int sr = d[0] / n, sc = d[0] % n;
+            queue2(Step{vr, vc, sr, sc, 0}, Step{sr, sc, vr, vc, now + 500 + Rules().humanCooldownMs});
+            return;
+          }
+        }
+      } else if (ca == HUMAN || cb == HUMAN) {
+        // Trap D: a piece still cooling down reaches the open end; it goes the moment it can.
+        const int* E = ca == HUMAN ? e[1] : e[0];
+        if (b.at(E[0], E[1]) != EMPTY) continue;
+        for (int i = 0; i < g.pieceCount(); i++) {
+          const PieceView& h = g.pieces()[i];
+          if (!h.alive || h.held || h.side != HUMAN || ready(g, h)) continue;
+          if (!reaches(b, h.r, h.c, E[0], E[1])) continue;
+          q[0] = Step{h.r, h.c, E[0], E[1], h.cooldownUntil};
+          qn = 1;
+          traps++;
+          return;
+        }
+      }
+    }
+  }
+
+  void act(SimDriver& d) {
+    const Game& g = d.game();
+    if (g.phase() != Phase::Play) return;
+    const uint32_t now = g.clockMs();
+    if (holding) {
+      if (now - liftClock < Params().humanMoveMs) return;
+      const PlaceResult res = d.place(toR, toC);
+      if (res != PlaceResult::Ok && res != PlaceResult::Pending) {
+        d.place(fromR, fromC);  // the square is gone: put it back
+        qn = 0;
+      }
+      holding = false;
+      return;
+    }
+    if (g.heldCount() > 0) return;  // a pending placement has not landed yet
+    if (qn == 0) plan(g);
+    if (qn == 0) return;
+    const Step st = q[0];
+    if (now < st.notBefore) return;
+    const PieceView* p = humanAt(g, st.fr, st.fc);
+    if (!p) {
+      qn = 0;
+      return;
+    }
+    if (!ready(g, *p)) return;
+    if (d.lift(st.fr, st.fc) != LiftResult::Ok) {
+      qn = 0;
+      return;
+    }
+    holding = true;
+    liftClock = now;
+    fromR = st.fr;
+    fromC = st.fc;
+    toR = st.tr;
+    toC = st.tc;
+    q[0] = q[1];
+    qn--;
+  }
+};
+
+// Mirror (left-right) and shift of a seven-row layout.
+static void mirrorLayout(const char* in, char* out) {
+  int start = 0;
+  for (int i = 0;; i++) {
+    if (in[i] == '\n' || in[i] == '\0') {
+      for (int j = start; j < i; j++) out[j] = in[start + (i - 1 - j)];
+      out[i] = in[i];
+      if (in[i] == '\0') return;
+      start = i + 1;
+    }
+  }
+}
+
+// The machine plays `level` from `layout` (7 'M' and 7 'H'; ids per Game's order: machine pieces
+// odd, human pieces even, both in row-major order) against the Trapper for `ms` of game time.
+// Returns the machine pieces the human captured; *traps = trap sequences the human started.
+// `pre`: a first human move (from row, col, to row, col; pre[0] < 0 for none). *predicted (when
+// given) = pieces lost that the read saw coming (State::lostPredicted).
+static int playTraps(const char* layout, const int pre[4], Level level, uint32_t ms, int* traps,
+                     int* predicted = nullptr) {
+  Params p;
+  p.level = level;
+  SimDriver d(Rules(), p, 1);
+  d.start();
+  for (int i = 0; i < 300; i++) d.advance(10);  // countdown
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)d.state().phase);
+  int m = 0, h = 0, r = 0, c = 0;
+  for (const char* q = layout; *q; ++q) {
+    if (*q == '\n') {
+      r++;
+      c = 0;
+      continue;
+    }
+    if (*q == 'M') d.teleport(2 * (m++) + 1, r, c);
+    if (*q == 'H') d.teleport(2 * (h++) + 2, r, c);
+    c++;
+  }
+  TEST_ASSERT_EQUAL_INT(7, m);
+  TEST_ASSERT_EQUAL_INT(7, h);
+  Trapper t;
+  if (pre[0] >= 0) {
+    t.q[0] = Trapper::Step{pre[0], pre[1], pre[2], pre[3], 0};
+    t.qn = 1;
+  }
+  const uint32_t end = d.game().clockMs() + ms;
+  while (d.state().phase != Phase::Over && d.game().clockMs() < end) {
+    d.advance(10);
+    t.act(d);
+  }
+  *traps = t.traps;
+  if (predicted) *predicted = d.state().lostPredicted;
+  return d.state().capturedHuman;
+}
+
+struct TrapCase {
+  const char* name;
+  const char* layout;
+  int pre[4];  // a first human move, or {-1, ...}
+};
+
+// Each layout, its mirror image and the shifted copies given, at normal and hard. With `sprung`,
+// the human must also have started a trap in every game (the machine piece is already exposed, so
+// the test checks that it gets out in time, not only that it does not walk in). `firstMirror` = 1
+// checks the mirror image only.
+static void checkTraps(const TrapCase* cases, int count, bool sprung, int firstMirror = 0) {
+  char msg[96];
+  for (int i = 0; i < count; i++) {
+    for (int mirror = firstMirror; mirror < 2; mirror++) {
+      char buf[64];
+      if (mirror) {
+        mirrorLayout(cases[i].layout, buf);
+      } else {
+        std::snprintf(buf, sizeof(buf), "%s", cases[i].layout);
+      }
+      int pre[4];
+      for (int j = 0; j < 4; j++) pre[j] = cases[i].pre[j];
+      if (mirror && pre[0] >= 0) {
+        pre[1] = 6 - pre[1];
+        pre[3] = 6 - pre[3];
+      }
+      for (Level lv : {Level::Normal, Level::Hard}) {
+        int traps = 0;
+        const int lost = playTraps(buf, pre, lv, 20000, &traps);
+        std::snprintf(msg, sizeof(msg), "%s%s at %s: lost %d (%d traps)", cases[i].name, mirror ? " mirrored" : "",
+                      lv == Level::Hard ? "hard" : "normal", lost, traps);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, lost, msg);
+        if (sprung) TEST_ASSERT_TRUE_MESSAGE(traps > 0, msg);
+      }
+    }
+  }
+}
+
+// Trap A: from the opening, a machine piece that comes out into the open is closed in by two
+// human pieces one after the other.
+void test_trap_a_in_time() {
+  const TrapCase cases[] = {
+      {"A", "MMMMMMM\n.......\n.......\n.......\n.......\n.......\nHHHHHHH", {-1, -1, -1, -1}},
+      {"A shifted up", "MMMMMMM\n.......\n.......\n.......\n.......\nHHHHHHH\n.......", {-1, -1, -1, -1}},
+      {"A shifted right", ".MMMMMM\nM......\n.......\n.......\n.......\nH......\n.HHHHHH", {-1, -1, -1, -1}},
+  };
+  checkTraps(cases, 3, false);
+  // A machine piece already in the open: both ends of its row can be reached at once.
+  const TrapCase exposed[] = {
+      {"A exposed", "MMM.MMM\n...M...\n.......\n.......\n.......\n.......\nHHHHHHH", {-1, -1, -1, -1}},
+      {"A exposed shifted", "MMM.MMM\n..M....\n.......\n.......\n.......\n.......\nHHHHHHH", {-1, -1, -1, -1}},
+      {"A exposed shifted down", "MMM.MMM\n.......\n...M...\n.......\n.......\n.......\nHHHHHHH", {-1, -1, -1, -1}},
+  };
+  checkTraps(exposed, 3, true);
+}
+
+// Trap B: two human pieces with an empty square between them; a machine piece that goes in is
+// caught when one of them steps aside and comes back after its cooldown.
+void test_trap_b_in_time() {
+  const TrapCase cases[] = {
+      {"B", "MMMMMMM\n......H\n.......\n.......\n.......\n..H.H..\nHH...HH", {-1, -1, -1, -1}},
+      {"B shifted", "MMMMMMM\n......H\n.......\n.......\n.......\n.H.H...\nH...HHH", {-1, -1, -1, -1}},
+      {"B shifted up", "MMMMMMM\n......H\n.......\n.......\n..H.H..\n.......\nHH...HH", {-1, -1, -1, -1}},
+  };
+  checkTraps(cases, 3, false);
+  // A machine piece already between the two human pieces.
+  const TrapCase exposed[] = {
+      {"B exposed", "MMM.MMM\n..HMH..\n.......\n.......\n.......\n......H\nHH...HH", {-1, -1, -1, -1}},
+      {"B exposed shifted", "MMM.MMM\n.HMH...\n.......\n.......\n.......\n......H\nH...HHH", {-1, -1, -1, -1}},
+      {"B exposed shifted down", "MMM.MMM\n.......\n..HMH..\n.......\n.......\n......H\nHH...HH", {-1, -1, -1, -1}},
+  };
+  checkTraps(exposed, 3, true);
+}
+
+// Trap C: as B, with a third piece that steps into the square the first one left.
+void test_trap_c_in_time() {
+  const TrapCase cases[] = {
+      {"C", "MMMMMMM\n.......\n.......\n.......\n.......\n..H.H..\nHHH..HH", {-1, -1, -1, -1}},
+      {"C shifted", "MMMMMMM\n.......\n.......\n.......\n.......\n...H.H.\nHHHH..H", {-1, -1, -1, -1}},
+      {"C shifted up", "MMMMMMM\n.......\n.......\n.......\n..H.H..\n..H....\nHH...HH", {-1, -1, -1, -1}},
+  };
+  checkTraps(cases, 3, false);
+  // A machine piece already between the two human pieces, a third one ready to step in.
+  const TrapCase exposed[] = {
+      {"C exposed", "MMM.MMM\n..HMH..\n.......\n.......\n.......\n.......\nHHH..HH", {-1, -1, -1, -1}},
+      {"C exposed shifted down", "MMM.MMM\n.......\n..HMH..\n.......\n.......\n.......\nHHH..HH", {-1, -1, -1, -1}},
+  };
+  checkTraps(exposed, 2, true);
+  // "C exposed shifted": its mirror image is escaped in time like the others.
+  const TrapCase shifted[] = {
+      {"C exposed shifted", "MMM.MMM\n...HMH.\n.......\n.......\n.......\n.......\nHHHH..H", {-1, -1, -1, -1}},
+  };
+  checkTraps(shifted, 1, true, 1);
+  // The unmirrored copy is a forced loss under the time model: (1,3) steps aside and (6,3) comes
+  // up the open column into its square, with (1,5) and the pieces on row 6 left to answer an
+  // escape. Forcing each first move of the machine in turn (every column escape, every move
+  // elsewhere) loses the piece against a human playing as fast as the model allows; the column
+  // escapes only survive the Trapper because it never changes the plan it queued. So the test checks the read instead: every piece lost
+  // was seen coming (risk >= 0.5 in the latest read at least the level's margin before the
+  // capture, State::lostPredicted).
+  for (Level lv : {Level::Normal, Level::Hard}) {
+    char msg[96];
+    int traps = 0, predicted = 0;
+    const int lost = playTraps(shifted[0].layout, shifted[0].pre, lv, 20000, &traps, &predicted);
+    std::snprintf(msg, sizeof(msg), "C exposed shifted (forced loss) at %s: lost %d, predicted %d (%d traps)",
+                  lv == Level::Hard ? "hard" : "normal", lost, predicted, traps);
+    TEST_ASSERT_TRUE_MESSAGE(traps > 0, msg);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(lost, predicted, msg);
+  }
+}
+
+// Trap D: a machine piece beside a human piece; a human piece moves to where it reaches the open
+// side and goes there the moment its cooldown is over (the old read did not count a piece in
+// cooldown until 1.5 s were left, or at all at normal).
+void test_trap_d_in_time() {
+  const TrapCase cases[] = {
+      {"D", "MMM.MMM\n.......\n..HM...\n.......\n.......\nH......\nHHHH..H", {6, 6, 2, 6}},
+      {"D shifted", "MMM.MMM\n.......\n...HM..\n.......\n.......\nH......\nHHHH..H", {6, 6, 2, 6}},
+      {"D shifted down", "MMM.MMM\n.......\n.......\n..HM...\n.......\nH......\nHHHH..H", {6, 6, 3, 6}},
+  };
+  checkTraps(cases, 3, true);
+}
+
 void test_state_shape_and_manual_play() {
   SimDriver d(Rules(), Params(), 1);
   State s = d.state();
@@ -413,10 +772,12 @@ void test_state_shape_and_manual_play() {
   TEST_ASSERT_EQUAL_INT(-1, s.pendingId);
   TEST_ASSERT_EQUAL_INT(HUMAN, s.cells[5 * 7 + 6]);
   for (int i = 0; i < 100; i++) d.advance(10);
-  // The machine reads and moves on its own. It does not walk into the open where two human
-  // pieces could close on it, so offer it something: a human piece next to its back row.
-  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)d.lift(6, 1));
-  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)d.place(1, 1));
+  // The machine reads and moves on its own. It stays put while nothing is gained or threatened,
+  // so offer it a capture: with its piece moved to (1,3), a human piece on (1,2) is caught by
+  // (0,1) -> (1,1).
+  d.teleport(13, 1, 3);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)d.lift(6, 2));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)d.place(1, 2));
   for (int i = 0; i < 1000; i++) d.advance(10);
   s = d.state();
   TEST_ASSERT_TRUE(s.machineMoves > 0);
@@ -470,5 +831,9 @@ int main(int, char**) {
   RUN_TEST(test_race_picks_least_spare);
   RUN_TEST(test_race_guards_a_threatened_piece);
   RUN_TEST(test_race3_three_moves);
+  RUN_TEST(test_trap_a_in_time);
+  RUN_TEST(test_trap_b_in_time);
+  RUN_TEST(test_trap_c_in_time);
+  RUN_TEST(test_trap_d_in_time);
   return UNITY_END();
 }

@@ -39,7 +39,8 @@ struct RaceMask {
 struct RaceTimes {
   float humanMove, humanLift, humanPlace, humanReact;  // human hand (Params, 3.3)
   float humanCooldown, humanInterval, maxHold;         // human rules (maxHold 0 = no limit)
-  float machineCooldown, engage, react;                // machine (react is the read interval)
+  float machineCooldown, engage, react;                // machine (react: worst reaction, 3.6)
+  float readInterval;  // time between reads (MachineController: reactMs, at least 150 ms)
   float freeSpeed, dragSpeed;                          // squares per second
   float margin;                                        // 0 / 200 / 300 ms by level (3.9)
   bool easy;  // Easy: only the held piece's H1 is read (3.11); H2-H4 are INF
@@ -64,13 +65,20 @@ struct RaceState {
   int reserved;                 // reserved square (r*n+c) or -1: humans cannot go there
   float gap;         // placement interval left (3.3)
   float firstPlace;  // earliest placement of a non-pending piece (gap, or gap + interval if pending)
-  float firstLift;   // earliest lift (gap while a placement is pending, else 0)
+  float firstLift;   // earliest lift of a piece not in hand: gap while a placement is pending;
+                     // while a piece is held, when it is put down (humanPlace, or the hold
+                     // limit if sooner): only one piece is in hand (3.1, 3.5); else 0
   RaceHuman h[RACE_MAX_HUMANS];
   int hCount;
   float mReady[MAX_N * MAX_N];  // machine piece on the square: cooldown left
   int mId[MAX_N * MAX_N];       // machine piece id on the square (0 for none)
   float headFree;               // head is busy until then
   float headR, headC;           // where the head is when it becomes free
+  // The human's reaction to a machine move (3.6): while reactAt > 0, a human piece put on a
+  // square outside `planned` (the ends of the lines threatened before the move, where the human
+  // is heading anyway) is lifted, or if held placed, no sooner than reactAt. raceInit: 0.
+  float reactAt;
+  RaceMask planned;
 };
 
 // A maximal run of `len` pieces of one side starting at (r,c) in direction (dr,dc) (0,1 = row,
@@ -116,19 +124,34 @@ float raceHumanTime(const RaceState& st, const RaceTimes& t, const RaceLine& L);
 
 // S(p) of 3.6 for the machine piece on (r,c), the head free at headFree at (headR, headC).
 float raceStart(const RaceState& st, const RaceTimes& t, int r, int c, float headFree, float headR, float headC);
+// Free travel of the head from (headR, headC) to (r,c), along travelPath as the gantries move.
+float raceTravel(const RaceTimes& t, int r, int c, float headR, float headC);
 // Arrival of the piece at (r,c) moving to (tr,tc) when it starts being pulled at `start`.
 float raceArrival(const RaceTimes& t, int r, int c, int tr, int tc, float start);
-// What moving (pr,pc) to (dr,dc) leaves for the human (3.6), independent of when it starts:
-// thDest = least T_h of the lines through the destination, thRest = least T_h of the lines the
-// rest of its old lines form. Both on the board after the move, reach rebuilt per 3.6.
+// What moving (pr,pc) to (dr,dc) leaves for the human (3.6): thDest = least T_h of the lines
+// through the destination, with the human reacting to the move at `reactAt` (0: at once) for
+// squares outside `planned` (see RaceState::reactAt; null: nothing planned); thRest = least T_h
+// of the lines the rest of its old lines form (no reaction needed). Both on the board after the
+// move, reach rebuilt per 3.6.
 void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int dr, int dc, float* thDest,
-                   float* thRest);
-// Whether (dr,dc) is a safe destination for (pr,pc) starting at `start` (3.6 (1) and (2)).
-bool raceSafeDest(const RaceState& st, const RaceTimes& t, int pr, int pc, int dr, int dc, float start);
+                   float* thRest, float reactAt = 0.0f, const RaceMask* planned = nullptr);
+// Ends of the threatened machine lines (T_h < RACE_DANGER_MS) among ev[0..count).
+void racePlanned(const Board& b, const RaceLineEval ev[], int count, RaceMask* out);
+// Whether (dr,dc) is a safe destination for (pr,pc) starting at `start` (3.6 (1) and (2)); the
+// human reacts to the move at start + humanReact for squares outside `planned`.
+bool raceSafeDest(const RaceState& st, const RaceTimes& t, int pr, int pc, int dr, int dc, float start,
+                  const RaceMask* planned = nullptr);
+// When the human can react to a move of the piece on (r,c) starting no sooner than the head
+// allows on st (its cooldown or the head's busy time, then reactMs and engageMs; travel not
+// counted, so never later than the real start): that start + humanReact.
+float raceReactAt(const RaceState& st, const RaceTimes& t, int r, int c);
 
 // T_h of every machine line, the guard assignment of 3.7 (head from st.headFree/headR/headC) and
 // the risk of each line. Returns the number of lines written to out (RACE_MAX_LINES at most).
-int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[]);
+// `lead` is added to every save (guarding needs save + lead + margin <= T_h, and the risk of an
+// unguarded line uses save + lead): "stay" passes the read interval, since its guard starts at
+// the next read at the earliest (plan 2026-10-31 3.9).
+int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], float lead = 0.0f);
 // Risk of each machine piece: the larger risk of the lines it is in (riskAt[r*n+c], 0 elsewhere).
 void racePieceRisk(const Board& b, const RaceLineEval ev[], int count, float riskAt[]);
 

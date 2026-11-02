@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include "Path.h"
 
 namespace {
 
@@ -37,20 +38,23 @@ void buildReach(RaceState& st, int i) {
   h.reach1.clear();
   h.reach2.clear();
   if (!h.alive) return;
-  Board b = st.board;
-  const int n = b.n;
-  int d[MAX_N * MAX_N];
-  const int k = dests(b, h.r, h.c, d);
-  if (!h.held) b.set(h.r, h.c, EMPTY);
-  for (int j = 0; j < k; j++) {
-    if (d[j] == st.reserved) continue;
-    h.reach1.set(d[j]);
-    b.cells[d[j]] = HUMAN;
-    int d2[MAX_N * MAX_N];
-    const int k2 = dests(b, d[j] / n, d[j] % n, d2);
-    for (int m = 0; m < k2; m++)
-      if (d2[m] != st.reserved) h.reach2.set(d2[m]);
-    b.cells[d[j]] = EMPTY;
+  const Board& b = st.board;
+  const int n = b.n, origin = h.r * n + h.c;
+  for (int d = 0; d < 4; d++) {
+    for (int rr = h.r + DIR_R[d], cc = h.c + DIR_C[d]; b.inside(rr, cc) && b.cells[rr * n + cc] == EMPTY;
+         rr += DIR_R[d], cc += DIR_C[d]) {
+      const int f = rr * n + cc;
+      if (f == st.reserved) continue;
+      h.reach1.set(f);
+      // Second move from f: the piece's own square is empty by then.
+      for (int e = 0; e < 4; e++) {
+        for (int r2 = rr + DIR_R[e], c2 = cc + DIR_C[e]; b.inside(r2, c2); r2 += DIR_R[e], c2 += DIR_C[e]) {
+          const int sq = r2 * n + c2;
+          if (b.cells[sq] != EMPTY && sq != origin) break;
+          if (sq != st.reserved) h.reach2.set(sq);
+        }
+      }
+    }
   }
 }
 
@@ -69,12 +73,22 @@ void refreshAlive(RaceState& st) {
 // When human piece i can be lifted (not for a held piece).
 float liftAt(const RaceState& st, const RaceHuman& h) { return fmax2(h.ready, st.firstLift); }
 
+// Whether a placement on sq waits for the human's reaction to the machine's move (3.6).
+bool reacts(const RaceState& st, int sq) { return st.reactAt > 0.0f && !st.planned.has(sq); }
+
+// When human piece h can be lifted to be put on sq.
+float liftFor(const RaceState& st, const RaceHuman& h, int sq) {
+  const float l = liftAt(st, h);
+  return reacts(st, sq) ? fmax2(l, st.reactAt) : l;
+}
+
 // H3 and H4 of 3.5: the human piece vi on one end steps away; another piece g (not on the other
 // end, square ob) comes into its square, or vi itself comes back after its cooldown.
 float stepAwayTime(const RaceState& st, const RaceTimes& t, int vi, int ob) {
   const RaceHuman& v = st.h[vi];
   if (v.held || v.pending || !v.reach1.any()) return RACE_INF;
-  const float tv = fmax2(liftAt(st, v) + t.humanMove, st.firstPlace);
+  const int vsq = v.r * st.board.n + v.c;
+  const float tv = fmax2(liftFor(st, v, vsq) + t.humanMove, st.firstPlace);
   float best = tv + t.humanCooldown + t.humanMove;  // H4
   Board b = st.board;
   b.set(v.r, v.c, EMPTY);
@@ -82,7 +96,7 @@ float stepAwayTime(const RaceState& st, const RaceTimes& t, int vi, int ob) {
     const RaceHuman& h = st.h[g];
     if (g == vi || g == ob || !h.alive || h.held) continue;
     if (!reachesStraight(b, h.r, h.c, v.r, v.c)) continue;
-    const float tg = fmax2(fmax2(tv + t.humanInterval, tv + t.humanMove), liftAt(st, h) + t.humanMove);  // H3
+    const float tg = fmax2(fmax2(tv + t.humanInterval, tv + t.humanMove), liftFor(st, h, vsq) + t.humanMove);  // H3
     best = fmin2(best, tg);
   }
   return best;
@@ -99,7 +113,7 @@ float twoPieces(const RaceState& st, const RaceTimes& t, int a, int b) {
       const RaceHuman& h = st.h[i2];
       // A held piece is placed first (nothing else can be lifted while it is up).
       if (i2 == i1 || !h.alive || h.held || !h.reach1.has(b)) continue;
-      const float t2 = fmax2(fmax2(t1 + t.humanInterval, t1 + t.humanMove), liftAt(st, h) + t.humanMove);
+      const float t2 = fmax2(fmax2(t1 + t.humanInterval, t1 + t.humanMove), liftFor(st, h, b) + t.humanMove);
       best = fmin2(best, t2);
     }
   }
@@ -114,9 +128,11 @@ Board machineBoard(const RaceState& st) {
   return b;
 }
 
+// The head travels along travelPath (the gantries follow it), not straight.
 float travelMs(const RaceTimes& t, int r, int c, float headR, float headC) {
-  const float dr = static_cast<float>(r) - headR, dc = static_cast<float>(c) - headC;
-  return std::sqrt(dr * dr + dc * dc) / t.freeSpeed * 1000.0f;
+  float pr[TRAVEL_MAX_POINTS], pc[TRAVEL_MAX_POINTS];
+  const int k = travelPath(headR, headC, r, c, pr, pc);
+  return polylineLength(pr, pc, k) / t.freeSpeed * 1000.0f;
 }
 
 float dragMs(const RaceTimes& t, int r, int c, int tr, int tc) {
@@ -152,8 +168,9 @@ float machineFill(const RaceState& st, const RaceTimes& t, const Board& mb, int 
 
 // Escape moves of one machine piece (3.6): destination, what it leaves for the human, drag time.
 struct Escape {
-  int dr, dc;
-  float thDest, thRest, drag;
+  int8_t dr, dc;
+  bool known;  // thDest and thRest computed (they are computed only when a guard needs them)
+  float drag, thDest, thRest;
 };
 
 constexpr int MAX_ESCAPES = MAX_N * 2 * (MAX_N - 1);
@@ -164,15 +181,17 @@ struct Guard {
   int pr, pc, dr, dc;
 };
 
-// Escapes of the machine pieces in the threatened lines, per square.
+// Escapes of the machine pieces in the threatened lines, per square, each square's sorted by drag
+// time (dests() order among equal drags).
 struct EscapeTable {
+  RaceMask planned;  // ends of the threatened lines (where the human is heading)
   int start[MAX_N * MAX_N];
   int count[MAX_N * MAX_N];
   Escape e[MAX_ESCAPES];
   int used;
 };
 
-void addEscapes(const RaceState& st, const RaceTimes& t, const Board& mb, EscapeTable& et, int r, int c) {
+void addEscapes(const RaceTimes& t, const Board& mb, EscapeTable& et, int r, int c) {
   const int n = mb.n, i = r * n + c;
   if (et.count[i] >= 0) return;
   et.start[i] = et.used;
@@ -180,45 +199,66 @@ void addEscapes(const RaceState& st, const RaceTimes& t, const Board& mb, Escape
   int d[MAX_N * MAX_N];
   const int k = dests(mb, r, c, d);
   for (int j = 0; j < k && et.used < MAX_ESCAPES; j++) {
-    Escape& x = et.e[et.used];
-    x.dr = d[j] / n;
-    x.dc = d[j] % n;
-    raceDestTimes(st, t, r, c, x.dr, x.dc, &x.thDest, &x.thRest);
+    Escape x;
+    x.dr = static_cast<int8_t>(d[j] / n);
+    x.dc = static_cast<int8_t>(d[j] % n);
     x.drag = dragMs(t, r, c, x.dr, x.dc);
+    x.known = false;
+    x.thDest = x.thRest = RACE_INF;
+    int pos = et.used;
+    while (pos > et.start[i] && et.e[pos - 1].drag > x.drag) {
+      et.e[pos] = et.e[pos - 1];
+      pos--;
+    }
+    et.e[pos] = x;
     et.used++;
     et.count[i]++;
   }
 }
 
 // save(L) with the head free at hf at (hr,hc): the earliest S over the pieces of L with a safe
-// destination; the guarding move is the one arriving first.
-Guard saveLine(const RaceState& st, const RaceTimes& t, const EscapeTable& et, const RaceLine& L, float hf, float hr,
+// destination; the guarding move is the one arriving first (the first piece of L and the first
+// destination in dests() order among equals). A piece's escapes are tried by drag time, so the
+// first safe one is its earliest arrival.
+Guard saveLine(const RaceState& st, const RaceTimes& t, EscapeTable& et, const RaceLine& L, float hf, float hr,
                float hc) {
   Guard g{RACE_INF, RACE_INF, -1, -1, -1, -1};
   const int n = st.board.n;
   for (int k = 0; k < L.len; k++) {
     const int r = L.r + L.dr * k, c = L.c + L.dc * k, i = r * n + c;
     const float S = raceStart(st, t, r, c, hf, hr, hc);
+    if (S > g.save) continue;
     for (int j = 0; j < et.count[i]; j++) {
-      const Escape& x = et.e[et.start[i] + j];
+      Escape& x = et.e[et.start[i] + j];
       const float arrival = S + x.drag;
+      if (S == g.save && !(arrival < g.arrival)) break;
+      if (!x.known) {
+        // The human reacts no sooner than the earliest start this piece can have on st (S
+        // varies with the head; the earliest keeps the cached times on the cautious side).
+        raceDestTimes(st, t, r, c, x.dr, x.dc, &x.thDest, &x.thRest, raceReactAt(st, t, r, c), &et.planned);
+        x.known = true;
+      }
       const float need1 = arrival + t.machineCooldown + t.react + t.engage + t.margin;
       if (!atLeast(x.thDest, need1) || !atLeast(x.thRest, S + t.margin)) continue;
-      if (S < g.save || (S == g.save && arrival < g.arrival)) g = Guard{S, arrival, r, c, x.dr, x.dc};
+      g = Guard{S, arrival, r, c, x.dr, x.dc};
+      break;
     }
   }
   return g;
 }
 
-bool guardable(const RaceTimes& t, const Guard& g, float th) { return !raceInf(g.save) && g.save + t.margin <= th; }
+bool guardable(const RaceTimes& t, const Guard& g, float th, float lead) {
+  return !raceInf(g.save) && g.save + lead + t.margin <= th;
+}
 
 struct Search {
   const RaceState* st;
   const RaceTimes* t;
-  const EscapeTable* et;
+  EscapeTable* et;
   const RaceLineEval* ev;
   const int* idx;  // threatened lines sorted by T_h
   int m;
+  float lead;
   int path[RACE_EXHAUSTIVE];
   Guard guards[RACE_EXHAUSTIVE];
   int best;
@@ -243,7 +283,7 @@ void searchOrders(Search& s, int depth, int pieces, float hf, float hr, float hc
     if (used) continue;
     const RaceLineEval& e = s.ev[s.idx[j]];
     const Guard g = saveLine(*s.st, *s.t, *s.et, e.line, hf, hr, hc);
-    if (!guardable(*s.t, g, e.th)) continue;
+    if (!guardable(*s.t, g, e.th, s.lead)) continue;
     s.path[depth] = j;
     s.guards[depth] = g;
     searchOrders(s, depth + 1, pieces + e.line.len, g.arrival, static_cast<float>(g.dr), static_cast<float>(g.dc));
@@ -264,6 +304,7 @@ RaceTimes raceTimes(const Snapshot& s, const Params& p) {
   t.machineCooldown = static_cast<float>(s.machineCooldownMs);
   t.engage = static_cast<float>(p.engageMs);
   t.react = static_cast<float>(p.reactMs);
+  t.readInterval = static_cast<float>(p.reactMs > 150 ? p.reactMs : 150);
   t.freeSpeed = p.freeSpeed;
   t.dragSpeed = p.dragSpeed;
   t.easy = p.level == Level::Easy;
@@ -331,6 +372,16 @@ void raceInit(RaceState& st, const Snapshot& s, const RaceTimes& t) {
       }
     }
   }
+  // One piece in hand (3.1): while a piece is held, no other piece is lifted before it is put
+  // down, placed or put back (humanPlace), or sent back by the hold limit if that comes sooner.
+  for (int i = 0; i < st.hCount; i++) {
+    const RaceHuman& h = st.h[i];
+    if (!h.held) continue;
+    const float down = fmax2(0.0f, fmin2(t.humanPlace, h.holdLeft));
+    st.firstLift = fmax2(st.firstLift, down);
+  }
+  st.reactAt = 0.0f;
+  st.planned.clear();
   st.headFree = 0.0f;
   st.headR = s.headR;
   st.headC = s.headC;
@@ -409,13 +460,22 @@ float raceHumanPlace(const RaceState& st, const RaceTimes& t, int hi, int sq) {
   if (!one && !h.reach2.has(sq)) return RACE_INF;
   if (h.held) {
     // Steps that would outlast the hold limit do not count.
-    if (t.humanPlace > h.holdLeft) return RACE_INF;
-    if (one) return t.humanPlace;
-    return fmax2(t.humanPlace, st.firstPlace) + t.humanCooldown + t.humanMove;
+    const float place = reacts(st, sq) ? fmax2(t.humanPlace, st.reactAt) : t.humanPlace;
+    if (place > h.holdLeft) return RACE_INF;
+    if (one) return place;
+    return fmax2(place, st.firstPlace) + t.humanCooldown + t.humanMove;
   }
-  const float lift = liftAt(st, h);
-  if (one) return lift + t.humanMove;
-  return fmax2(lift + t.humanMove, st.firstPlace) + t.humanCooldown + t.humanMove;
+  const float lift = liftFor(st, h, sq);
+  float e = one ? lift + t.humanMove : fmax2(lift + t.humanMove, st.firstPlace) + t.humanCooldown + t.humanMove;
+  // A held piece's origin frees only when that piece is placed elsewhere (putting it back fills
+  // the square again): another piece lands there no sooner than that placement plus the
+  // interval (one piece in hand, 3.1).
+  for (int j = 0; j < st.hCount; j++) {
+    const RaceHuman& o = st.h[j];
+    if (j == hi || !o.alive || !o.held || o.r * st.board.n + o.c != sq) continue;
+    e = fmax2(e, fmax2(t.humanPlace, st.firstPlace) + t.humanInterval);
+  }
+  return e;
 }
 
 float raceHumanTime(const RaceState& st, const RaceTimes& t, const RaceLine& L) {
@@ -459,19 +519,20 @@ float raceStart(const RaceState& st, const RaceTimes& t, int r, int c, float hea
   return base + t.react + travelMs(t, r, c, headR, headC) + t.engage;
 }
 
+float raceTravel(const RaceTimes& t, int r, int c, float headR, float headC) { return travelMs(t, r, c, headR, headC); }
+
 float raceArrival(const RaceTimes& t, int r, int c, int tr, int tc, float start) {
   return start + dragMs(t, r, c, tr, tc);
 }
 
 void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int dr, int dc, float* thDest,
-                   float* thRest) {
+                   float* thRest, float reactAt, const RaceMask* planned) {
   RaceState s2 = st;
   raceMoveMachine(s2, t, pr, pc, dr, dc, 0.0f);
   const Board& b2 = s2.board;
   float dest = RACE_INF, rest = RACE_INF;
   for (int dir = 0; dir < 2; dir++) {
     const int ldr = dir == 0 ? 0 : 1, ldc = dir == 0 ? 1 : 0;
-    dest = fmin2(dest, raceHumanTime(s2, t, raceLineThrough(b2, MACHINE, dr, dc, ldr, ldc)));
     // What is left of the piece's old line in this direction, on either side of its square.
     for (int side = -1; side <= 1; side += 2) {
       const int nr = pr + ldr * side, nc = pc + ldc * side;
@@ -479,19 +540,45 @@ void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int 
       rest = fmin2(rest, raceHumanTime(s2, t, raceLineThrough(b2, MACHINE, nr, nc, ldr, ldc)));
     }
   }
+  s2.reactAt = reactAt;
+  if (planned) {
+    s2.planned = *planned;
+  } else {
+    s2.planned.clear();
+  }
+  for (int dir = 0; dir < 2; dir++) {
+    const int ldr = dir == 0 ? 0 : 1, ldc = dir == 0 ? 1 : 0;
+    dest = fmin2(dest, raceHumanTime(s2, t, raceLineThrough(b2, MACHINE, dr, dc, ldr, ldc)));
+  }
   *thDest = dest;
   *thRest = rest;
 }
 
-bool raceSafeDest(const RaceState& st, const RaceTimes& t, int pr, int pc, int dr, int dc, float start) {
+void racePlanned(const Board& b, const RaceLineEval ev[], int count, RaceMask* out) {
+  out->clear();
+  for (int i = 0; i < count; i++) {
+    if (!ev[i].danger) continue;
+    const RaceLine& L = ev[i].line;
+    const int ar = L.r - L.dr, ac = L.c - L.dc, br = L.r + L.dr * L.len, bc = L.c + L.dc * L.len;
+    if (b.inside(ar, ac)) out->set(ar * b.n + ac);
+    if (b.inside(br, bc)) out->set(br * b.n + bc);
+  }
+}
+
+float raceReactAt(const RaceState& st, const RaceTimes& t, int r, int c) {
+  return fmax2(st.mReady[r * st.board.n + c], st.headFree) + t.react + t.engage + t.humanReact;
+}
+
+bool raceSafeDest(const RaceState& st, const RaceTimes& t, int pr, int pc, int dr, int dc, float start,
+                  const RaceMask* planned) {
   float thDest, thRest;
-  raceDestTimes(st, t, pr, pc, dr, dc, &thDest, &thRest);
+  raceDestTimes(st, t, pr, pc, dr, dc, &thDest, &thRest, start + t.humanReact, planned);
   const float arrival = raceArrival(t, pr, pc, dr, dc, start);
   const float need1 = arrival + t.machineCooldown + t.react + t.engage + t.margin;
   return atLeast(thDest, need1) && atLeast(thRest, start + t.margin);
 }
 
-int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[]) {
+int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], float lead) {
   RaceLine lines[RACE_MAX_LINES];
   const int k = raceLines(st.board, MACHINE, lines);
   int idx[RACE_MAX_LINES];
@@ -521,14 +608,25 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[]) {
   EscapeTable et;
   et.used = 0;
   for (int i = 0; i < MAX_N * MAX_N; i++) et.count[i] = -1;
+  racePlanned(st.board, out, k, &et.planned);
   const Board mb = machineBoard(st);
   for (int j = 0; j < m; j++) {
     const RaceLine& L = out[idx[j]].line;
-    for (int q = 0; q < L.len; q++) addEscapes(st, t, mb, et, L.r + L.dr * q, L.c + L.dc * q);
+    for (int q = 0; q < L.len; q++) addEscapes(t, mb, et, L.r + L.dr * q, L.c + L.dc * q);
   }
 
   float hf = st.headFree, hr = st.headR, hc = st.headC;
+  // The head before each guard in the order, and the guard's piece.
+  float hfAt[RACE_MAX_LINES], hrAt[RACE_MAX_LINES], hcAt[RACE_MAX_LINES];
+  int gR[RACE_MAX_LINES], gC[RACE_MAX_LINES];
+  int guards = 0;
   auto take = [&](int line, const Guard& g, int order) {
+    hfAt[guards] = hf;
+    hrAt[guards] = hr;
+    hcAt[guards] = hc;
+    gR[guards] = g.pr;
+    gC[guards] = g.pc;
+    guards++;
     RaceLineEval& e = out[line];
     e.guarded = true;
     e.order = order;
@@ -551,6 +649,7 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[]) {
     s.ev = out;
     s.idx = idx;
     s.m = m;
+    s.lead = lead;
     s.best = 0;
     s.bestLen = 0;
     searchOrders(s, 0, 0, hf, hr, hc);
@@ -559,19 +658,32 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[]) {
     int order = 0;
     for (int j = 0; j < m; j++) {
       const Guard g = saveLine(st, t, et, out[idx[j]].line, hf, hr, hc);
-      if (guardable(t, g, out[idx[j]].th)) take(idx[j], g, order++);
+      if (guardable(t, g, out[idx[j]].th, lead)) take(idx[j], g, order++);
     }
   }
-  // Lines left unguarded: save with the head after the guards, and their risk (3.7).
+  // Lines left unguarded: save with the head after the guards, and their risk (3.7). A guard
+  // that moves a piece of the line itself does not come first: the head would move that piece
+  // for this line instead, so the save is taken with the head as it was before that guard.
   for (int j = 0; j < m; j++) {
     RaceLineEval& e = out[idx[j]];
     if (e.guarded) continue;
-    const Guard g = saveLine(st, t, et, e.line, hf, hr, hc);
+    float lf = hf, lr = hr, lc = hc;
+    for (int o = 0; o < guards; o++) {
+      bool mine = false;
+      for (int q = 0; q < e.line.len && !mine; q++)
+        mine = e.line.r + e.line.dr * q == gR[o] && e.line.c + e.line.dc * q == gC[o];
+      if (!mine) continue;
+      lf = hfAt[o];
+      lr = hrAt[o];
+      lc = hcAt[o];
+      break;
+    }
+    const Guard g = saveLine(st, t, et, e.line, lf, lr, lc);
     e.save = g.save;
     if (raceInf(g.save)) {
       e.risk = clamp01((2500.0f - e.th) / 1000.0f);
     } else {
-      e.risk = clamp01(0.5f + (g.save + t.margin - e.th) / 2000.0f);
+      e.risk = clamp01(0.5f + (g.save + lead + t.margin - e.th) / 2000.0f);
     }
   }
   return k;

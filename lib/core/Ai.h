@@ -61,8 +61,33 @@ struct AiDebug {
   float pieceRisk[MAX_N * MAX_N];
   // Candidate moves ("stay" included) and how many of them the read counts as safe.
   int candidates, safeCandidates;
+  // Hard's fork check (plan 2026-10-31 3.9): safe candidates checked against the human's threat
+  // moves (at most the top three) and how many of them lost the fork penalty.
+  int forkChecked, forkPenalized;
 };
 
-// Machine move choice (pure function of the snapshot). Implemented in Ai.cpp. With `dbg`, also
-// writes what the read saw there (does not change the move).
+// One candidate as think() weighs it (plan 2026-10-31 3.9), for the golden-table generator and
+// tests.
+struct AiCandidate {
+  bool none;  // "stay"
+  int pieceId;
+  int toR, toC;
+  bool safe;
+  // Compared for the choice: the safe candidates when there is one, otherwise all of them.
+  bool contending;
+  float score;    // the score compared (fork penalty included); 0 when not contending
+  float penalty;  // fork penalty taken off (Hard, top three safe candidates)
+};
+
+// "Stay" plus every legal move of up to MAX_N machine pieces.
+constexpr int AI_MAX_CANDIDATES = 1 + MAX_N * 2 * (MAX_N - 1);
+
+// Machine move choice (plan 2026-10-31 3.9-3.11; pure function of the snapshot). Implemented in
+// Ai.cpp. With `dbg`, also writes what the read saw there (does not change the move): the risk of
+// each machine line and piece on the snapshot's board (3.7), the candidates and the safe ones.
 AiMove think(const Snapshot& s, const Params& p, AiDebug* dbg = nullptr);
+// The candidates think() weighs on s, in its order ("stay" first, then the machine pieces in id
+// order and their destinations in dests() order). Writes at most `cap` and returns the count.
+// think() picks the contending candidate with the highest score (ties within 0.01 by a hash of
+// the snapshot and the candidate's number).
+int thinkCandidates(const Snapshot& s, const Params& p, AiCandidate out[], int cap);

@@ -80,6 +80,8 @@ class SimDriver {
   LiftResult lift(int r, int c);
   PlaceResult place(int r, int c);
   void enableBot(const BotParams& p);
+  // For tests: puts piece `id` on (r,c) (Game::onMachineStep) to set up a position.
+  void teleport(int id, int r, int c) { game_.onMachineStep(id, r, c); }
   void disableBot() { botOn_ = false; }
 
   State state() const;
