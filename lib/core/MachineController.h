@@ -30,12 +30,16 @@ class MachineController {
 
   // True when it is time to read: max(150, reactMs) after the last read, or (with readLift)
   // reactMs after the latest lift, whichever is earlier. False outside Play, during a job and
-  // while a result is awaited.
+  // while a result is awaited. Exception: once during the countdown after a board-mismatch
+  // pause (Game::mismatchCountdown), so the move is ready when Play resumes (plan 2026-10-31 3.2).
   bool wantsThink(uint32_t now) const;
   // Records the read time and the awaiting-result mark, and returns the snapshot to think on.
   Snapshot takeSnapshot(uint32_t now);
   // Clears the awaiting mark. Starts the job only when the piece is alive and cooled down and
   // the destination is still legal on the current board; otherwise the result is dropped.
+  // A result for the read made during a mismatch countdown is kept and started (with the same
+  // checks) by the first update() in Play; it is dropped if the game leaves the countdown
+  // other than into Play.
   void onThinkResult(const AiMove& m, uint32_t now);
   // A human piece was lifted (brings the next read forward when readLift is on).
   void onHumanLift(uint32_t now);
@@ -44,6 +48,7 @@ class MachineController {
   JobView job() const;
 
  private:
+  void startMove(const AiMove& m, uint32_t now);
   void updateMoveJob(uint32_t now);
   void updateRemovalJob(uint32_t now);
   void startRemoval(uint32_t now);
@@ -57,6 +62,9 @@ class MachineController {
   uint32_t liftAt_;
   bool liftPending_;
   bool awaiting_;
+  bool countdownRead_;  // the mismatch countdown's read was taken
+  bool hasDeferred_;    // deferred_ waits for Play
+  AiMove deferred_;
 
   bool active_;
   bool removing_;

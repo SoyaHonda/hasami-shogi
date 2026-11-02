@@ -49,7 +49,21 @@ class Game {
   // interval has passed, a piece held for maxHoldMs goes back to its square, and the time limit
   // ends the game.
   void tick(uint32_t now);
+  // Play -> Paused -> Countdown -> Play. Does not resume while mismatch() is set.
   void togglePause(uint32_t now);
+
+  // Board-mismatch pause (plan 2026-10-31 3.2; firmware only). cells: squares (r*n+c) where the
+  // sensors disagree with the game. From Play or Removing (otherwise ignored): goes to Paused,
+  // remembers the phase and sets mismatch(). A human piece that should be on one of the cells
+  // gets a human cooldown; when a cell holds no piece in the game, the held pieces (one may have
+  // been put there) get it too, so putting a held piece back still carries it.
+  void pauseForMismatch(const int cells[], int count, uint32_t now);
+  // Board agrees again: clears mismatch() and goes back to Removing, or to Play through a
+  // resumeCountdownMs countdown (mismatchCountdown() is set during that countdown).
+  void resumeFromMismatch(uint32_t now);
+  bool mismatch() const { return mismatch_; }
+  // In the countdown entered by resumeFromMismatch (MachineController reads during it).
+  bool mismatchCountdown() const { return phase_ == Phase::Countdown && mismatchCountdown_; }
 
   LiftResult onHumanLift(int r, int c, uint32_t now);
   // placedAt: caller time the piece was put down (<= now; the firmware's sensor confirms a
@@ -156,4 +170,7 @@ class Game {
   bool reserveUsed_[2][MAX_N];
   int stuckId_;
   Violation violation_;
+  bool mismatch_;
+  Phase mismatchFrom_;
+  bool mismatchCountdown_;
 };

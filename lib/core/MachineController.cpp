@@ -9,6 +9,9 @@ MachineController::MachineController(Game& game, IGantry& gantry, const Params& 
       liftAt_(0),
       liftPending_(false),
       awaiting_(false),
+      countdownRead_(false),
+      hasDeferred_(false),
+      deferred_{},
       active_(false),
       removing_(false),
       pieceId_(-1),
@@ -25,7 +28,9 @@ MachineController::MachineController(Game& game, IGantry& gantry, const Params& 
       slotC_(-1) {}
 
 bool MachineController::wantsThink(uint32_t) const {
-  if (game_.phase() != Phase::Play || active_ || awaiting_) return false;
+  if (active_ || awaiting_) return false;
+  if (game_.mismatchCountdown()) return !countdownRead_ && !hasDeferred_;
+  if (game_.phase() != Phase::Play) return false;
   const uint32_t clock = game_.clockMs();
   const uint32_t interval = params_.reactMs > 150 ? params_.reactMs : 150;
   if (clock >= lastRead_ && clock - lastRead_ >= interval) return true;
@@ -37,6 +42,7 @@ Snapshot MachineController::takeSnapshot(uint32_t) {
   lastRead_ = game_.clockMs();
   liftPending_ = false;
   awaiting_ = true;
+  if (game_.mismatchCountdown()) countdownRead_ = true;
   return game_.snapshot(gantry_.headR(), gantry_.headC());
 }
 
@@ -47,6 +53,15 @@ void MachineController::onHumanLift(uint32_t) {
 
 void MachineController::onThinkResult(const AiMove& m, uint32_t now) {
   awaiting_ = false;
+  if (!m.none && !active_ && game_.mismatchCountdown()) {
+    deferred_ = m;
+    hasDeferred_ = true;
+    return;
+  }
+  startMove(m, now);
+}
+
+void MachineController::startMove(const AiMove& m, uint32_t now) {
   if (m.none || active_ || game_.phase() != Phase::Play) return;
   if (m.pieceId < 1 || m.pieceId > game_.pieceCount()) return;
   const PieceView& p = game_.pieces()[m.pieceId - 1];
@@ -87,6 +102,12 @@ void MachineController::update(uint32_t now) {
   // The game clock is frozen outside Play, so this puts the last read at the moment Play
   // resumes (the first read then comes reactMs after the countdown, as in the original).
   if (ph != Phase::Play) lastRead_ = game_.clockMs();
+  if (ph != Phase::Countdown) countdownRead_ = false;
+  if (hasDeferred_ && ph != Phase::Countdown) {
+    // The read made during the mismatch countdown: start it the moment Play comes back.
+    hasDeferred_ = false;
+    if (ph == Phase::Play) startMove(deferred_, now);
+  }
   if (ph == Phase::Ready) {
     // Game was reset: drop whatever was going on.
     if (active_) endJob();

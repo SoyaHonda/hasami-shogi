@@ -1,6 +1,6 @@
 #include "LedPlan.h"
 
-void ledPlan(const Game& game, const MachineController& mc, uint32_t now, Rgb out[]) {
+void ledPlan(const Game& game, const MachineController& mc, uint32_t now, Rgb out[], const bool mismatch[]) {
   const int n = game.rules().n;
   for (int i = 0; i < n * n; i++) out[i] = LED_OFF;
   const PieceView* pieces = game.pieces();
@@ -22,7 +22,7 @@ void ledPlan(const Game& game, const MachineController& mc, uint32_t now, Rgb ou
 
   // Blue, then yellow on top: destinations of held pieces.
   const Phase ph = game.phase();
-  if (game.heldCount() > 0 && (ph == Phase::Play || ph == Phase::Removing)) {
+  if (game.heldCount() > 0 && (ph == Phase::Play || ph == Phase::Removing || game.mismatch())) {
     const Board withReserve = game.boardWithReserve();
     Board plain = game.boardWithoutHeld();
     const bool readLift = mc.params().readLift;
@@ -64,5 +64,15 @@ void ledPlan(const Game& game, const MachineController& mc, uint32_t now, Rgb ou
   if (v.valid && v.r >= 0 && v.r < n && v.c >= 0 && v.c < n) {
     const uint32_t age = now - v.at;
     if (age < LED_VIOLATION_MS) out[v.r * n + v.c] = (age / LED_VIOLATION_BLINK_MS) % 2 == 0 ? LED_RED : LED_OFF;
+  }
+
+  // Mismatch pause: where pieces should be (white) and should not be (red blink).
+  if (mismatch && game.mismatch()) {
+    const Board b = game.boardWithoutHeld();
+    const bool lit = (now / LED_MISMATCH_BLINK_MS) % 2 == 0;
+    for (int i = 0; i < n * n; i++) {
+      if (!mismatch[i]) continue;
+      out[i] = b.cells[i] != EMPTY ? LED_WHITE : lit ? LED_RED : LED_OFF;
+    }
   }
 }

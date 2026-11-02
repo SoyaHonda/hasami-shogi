@@ -24,7 +24,7 @@ int BoardWatcher::update(const int8_t sensed[], const int8_t expected[],
       // Lift.
       if (e == HUMAN && s != HUMAN) {
         if (!liftReported_[i]) {
-          out[k++] = WatchEvent{WatchEvent::Lift, r, c};
+          out[k++] = WatchEvent{WatchEvent::Lift, r, c, now};
           liftReported_[i] = true;
         }
       } else {
@@ -38,7 +38,7 @@ int BoardWatcher::update(const int8_t sensed[], const int8_t expected[],
           placeSince_[i] = now;
         }
         if (!placeReported_[i] && now - placeSince_[i] >= PLACE_MS) {
-          out[k++] = WatchEvent{WatchEvent::Place, r, c};
+          out[k++] = WatchEvent{WatchEvent::Place, r, c, placeSince_[i]};
           placeReported_[i] = true;
         }
       } else {
@@ -49,7 +49,7 @@ int BoardWatcher::update(const int8_t sensed[], const int8_t expected[],
       // MachineTouch.
       if (!machineCells[i] && ((s == MACHINE) != (e == MACHINE))) {
         if (!touchReported_[i]) {
-          out[k++] = WatchEvent{WatchEvent::MachineTouch, r, c};
+          out[k++] = WatchEvent{WatchEvent::MachineTouch, r, c, now};
           touchReported_[i] = true;
         }
       } else {
@@ -58,6 +58,15 @@ int BoardWatcher::update(const int8_t sensed[], const int8_t expected[],
     }
   }
   return k;
+}
+
+void BoardWatcher::resync(const int8_t sensed[], const int8_t expected[]) {
+  for (int i = 0; i < n_ * n_; i++) {
+    liftReported_[i] = false;
+    placePending_[i] = false;
+    placeReported_[i] = false;
+    touchReported_[i] = (sensed[i] == MACHINE) != (expected[i] == MACHINE);
+  }
 }
 
 int BoardWatcher::diffInitial(const int8_t sensed[], const int8_t expected[], int out[]) const {

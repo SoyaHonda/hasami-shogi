@@ -7,6 +7,11 @@
 // think() and returns the move through a second queue. Every snapshot sent
 // gets exactly one result back (MachineController waits for it).
 //
+// When the sensed board and the game's board disagree for 300 ms (outside the
+// squares the machine is working on), the game pauses; the LEDs show where
+// pieces belong (white) and where none should be (red blink), and play resumes
+// 300 ms after the board agrees again (plan 2026-10-31 3.2).
+//
 // Serial commands (115200 baud, one per line):
 //   scan       print the debounced classification of every square as a grid
 //              (. empty, H human / N pole, M machine / S pole) and raw values
@@ -72,6 +77,14 @@ Game game(rules);
 MachineController controller(game, gantry, params);
 BoardWatcher watcher(rules.n);
 bool gantryOk = false;
+
+// Board mismatch pause (checkMismatch).
+constexpr uint32_t MISMATCH_MS = 300;
+bool mismatchCells[MAX_N * MAX_N];
+int mismatchList[MAX_N * MAX_N];
+bool diffSinceValid = false, agreeSinceValid = false;
+uint32_t diffSince = 0, agreeSince = 0;
+bool resyncDue = false;  // resync the watcher when Play/Removing comes back
 
 struct ThinkRequest {
   Snapshot snap;
@@ -329,6 +342,8 @@ void cmdCd() {
     return;
   }
   watcher.reset();
+  diffSinceValid = agreeSinceValid = false;
+  resyncDue = false;
   game.start(millis());
   Serial.println("cd: countdown started");
 }
@@ -388,6 +403,72 @@ void buildMachineCells(bool out[]) {
       if (fabsf(r - hr) < 1.0f && fabsf(c - hc) < 1.0f) mark(r, c);
 }
 
+// Board mismatch (plan 2026-10-31 3.2): after the watcher's events, compare the
+// sensors with the game's board (held pieces removed), leaving out the squares
+// the machine is working on, the squares within HallScanner::HOLD_RADIUS of the
+// energised head (their readings are frozen), the target of a pending placement
+// (the piece is already there) and the origins of held pieces (empty on the
+// board). A difference lasting MISMATCH_MS pauses the game; agreement lasting
+// MISMATCH_MS resumes it. mismatchCells also feeds the LEDs.
+void checkMismatch(uint32_t now) {
+  const int n = rules.n;
+  const Phase ph = game.phase();
+  const bool watching = ph == Phase::Play || ph == Phase::Removing || game.mismatch();
+  int count = 0;
+  for (int i = 0; i < n * n; ++i) mismatchCells[i] = false;
+  if (watching) {
+    static Board expected;
+    static bool skip[MAX_N * MAX_N];
+    expected = game.boardWithoutHeld();
+    buildMachineCells(skip);
+    const bool hold = magnetOn();
+    const float hr = gantry.headR(), hc = gantry.headC();
+    const float rad2 = HallScanner::HOLD_RADIUS * HallScanner::HOLD_RADIUS;
+    const Sq pend = game.pendingCell();
+    const int8_t* sensed = scanner.cells();
+    for (int i = 0; i < n * n; ++i) {
+      const int r = i / n, c = i % n;
+      if (skip[i] || game.machineBlocked(r, c)) continue;  // held origins, pending target
+      if (r == pend.r && c == pend.c) continue;
+      if (hold) {
+        const float dr = static_cast<float>(r) - hr, dc = static_cast<float>(c) - hc;
+        if (dr * dr + dc * dc <= rad2) continue;
+      }
+      if (sensed[i] != expected.cells[i]) {
+        mismatchCells[i] = true;
+        mismatchList[count++] = i;
+      }
+    }
+  }
+  if (!watching) {
+    diffSinceValid = false;
+    agreeSinceValid = false;
+    return;
+  }
+  if (count > 0) {
+    agreeSinceValid = false;
+    if (!diffSinceValid) {
+      diffSinceValid = true;
+      diffSince = now;
+    }
+    if (!game.mismatch() && now - diffSince >= MISMATCH_MS) {
+      game.pauseForMismatch(mismatchList, count, now);
+      if (game.mismatch()) Serial.printf("mismatch: paused (%d square(s))\n", count);
+    }
+  } else {
+    diffSinceValid = false;
+    if (!agreeSinceValid) {
+      agreeSinceValid = true;
+      agreeSince = now;
+    }
+    if (game.mismatch() && now - agreeSince >= MISMATCH_MS) {
+      game.resumeFromMismatch(now);
+      resyncDue = true;
+      Serial.println("mismatch: resumed");
+    }
+  }
+}
+
 // Applies the watcher's events to the game.
 void handleEvents(uint32_t now) {
   static Board expected;
@@ -395,6 +476,12 @@ void handleEvents(uint32_t now) {
   static WatchEvent events[MAX_WATCH_EVENTS];
   expected = game.boardWithoutHeld();
   buildMachineCells(machineCells);
+  // Back from a mismatch pause: report again what the game ignored while it was not playing.
+  const Phase ph0 = game.phase();
+  if (resyncDue && (ph0 == Phase::Play || ph0 == Phase::Removing)) {
+    watcher.resync(scanner.cells(), expected.cells);
+    resyncDue = false;
+  }
   const int k = watcher.update(scanner.cells(), expected.cells, machineCells, now, events);
   for (int i = 0; i < k; ++i) {
     const WatchEvent& e = events[i];
@@ -404,8 +491,8 @@ void handleEvents(uint32_t now) {
         break;
       case WatchEvent::Place:
         // The watcher reports a placement PLACE_MS after it first saw the piece; the placement
-        // interval and the hold limit are judged at that first sighting.
-        game.onHumanPlace(e.r, e.c, now, now - BoardWatcher::PLACE_MS);
+        // interval and the hold limit are judged at that first sighting (e.at).
+        game.onHumanPlace(e.r, e.c, now, e.at);
         break;
       case WatchEvent::MachineTouch: {
         const Phase ph = game.phase();
@@ -446,6 +533,7 @@ void serviceGame() {
   const uint32_t now = millis();
   scanner.update(now);
   handleEvents(now);
+  checkMismatch(now);
   game.tick(now);
   controller.update(now);
   gantry.update(now);
@@ -454,7 +542,7 @@ void serviceGame() {
   if (now - lastLedMs >= LED_PERIOD_MS) {
     lastLedMs = now;
     static Rgb colors[MAX_N * MAX_N];
-    ledPlan(game, controller, now, colors);
+    ledPlan(game, controller, now, colors, mismatchCells);
     leds.show(colors, rules.n);
   }
 }

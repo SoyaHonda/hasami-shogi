@@ -638,6 +638,163 @@ void test_move_job_refused_into_held_origin() {
   TEST_ASSERT_FALSE(mc.job().active);
 }
 
+// ---- Board mismatch pause (plan 2026-10-31 3.2) ----
+
+// After a mismatch pause from Play, the controller reads during the resume countdown and starts
+// the job the moment Play comes back. A countdown entered otherwise does not read.
+void test_mismatch_resume_countdown_reads_ahead() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  step(g, mc, 3000);
+  step(g, mc, 3100);
+  const int cells[] = {6 * 7 + 0};
+  g.pauseForMismatch(cells, 1, 3100);
+  step(g, mc, 3200);
+  TEST_ASSERT_FALSE(mc.wantsThink(3200));
+  g.resumeFromMismatch(4000);
+  step(g, mc, 4000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+  TEST_ASSERT_TRUE(mc.wantsThink(4000));
+  mc.takeSnapshot(4000);
+  TEST_ASSERT_FALSE(mc.wantsThink(4000));
+  mc.onThinkResult(move(mId(0), 3, 0), 4100);
+  TEST_ASSERT_FALSE(mc.job().active);  // waits for Play
+  step(g, mc, 4500);
+  TEST_ASSERT_FALSE(mc.wantsThink(4500));  // one read per countdown
+  TEST_ASSERT_FALSE(mc.job().active);
+  step(g, mc, 4999);
+  TEST_ASSERT_FALSE(mc.job().active);
+  step(g, mc, 5000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_TRUE(mc.job().active);
+  TEST_ASSERT_EQUAL_INT(mId(0), mc.job().pieceId);
+  TEST_ASSERT_EQUAL_INT(3, mc.job().toR);
+
+  // A countdown after a pause by the person: no read until Play.
+  Game g2;
+  startPlay(g2);
+  VirtualGantry vg2(p, 0.0f, 3.0f);
+  MachineController mc2(g2, vg2, p);
+  step(g2, mc2, 3100);
+  g2.togglePause(3100);
+  step(g2, mc2, 3200);
+  g2.togglePause(4000);
+  step(g2, mc2, 4000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g2.phase());
+  TEST_ASSERT_FALSE(mc2.wantsThink(4000));
+}
+
+// A result that arrives during the resume countdown but no longer fits when Play starts is
+// dropped, and a pause during the countdown drops it too.
+void test_mismatch_countdown_result_dropped_when_reset() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  step(g, mc, 3100);
+  const int cells[] = {6 * 7 + 0};
+  g.pauseForMismatch(cells, 1, 3100);
+  g.resumeFromMismatch(4000);
+  step(g, mc, 4000);
+  mc.takeSnapshot(4000);
+  mc.onThinkResult(move(mId(0), 3, 0), 4100);
+  g.reset();
+  step(g, mc, 4200);
+  g.start(4200);
+  step(g, mc, 7200);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_FALSE(mc.job().active);
+}
+
+// Pausing while a removal is dragging: the square in progress is finished, the magnet stays on
+// and the job waits; resuming carries on to the reserve row.
+void test_mismatch_pause_during_removal_finishes_square() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  teleport(g, mId(3), 3, 3);
+  teleport(g, hId(2), 3, 2);
+  uint32_t now = 3000;
+  step(g, mc, now);
+  g.onHumanLift(6, 4, now);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 4, now));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
+  // Run until the piece is being pulled out of (3,3).
+  while (now < 20000) {
+    now += 1;
+    step(g, mc, now);
+    const JobView j = mc.job();
+    if (j.active && j.removing && j.stage == Stage::Drag && !vg.idle()) break;
+  }
+  TEST_ASSERT_FALSE(vg.idle());
+  TEST_ASSERT_EQUAL_INT(3, piece(g, mId(3)).r);
+  const int cells[] = {5 * 7 + 5};
+  g.pauseForMismatch(cells, 1, now);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  const uint32_t pausedAt = now;
+  while (now < pausedAt + 3000) {
+    now += 5;
+    step(g, mc, now);
+  }
+  TEST_ASSERT_TRUE(vg.idle());
+  TEST_ASSERT_EQUAL_INT(2, piece(g, mId(3)).r);  // exactly one square
+  TEST_ASSERT_EQUAL_INT(3, piece(g, mId(3)).c);
+  TEST_ASSERT_TRUE(mc.job().active);
+  TEST_ASSERT_TRUE(mc.job().removing);
+  TEST_ASSERT_EQUAL_INT((int)MagnetMode::PullMachine, (int)vg.magnetMode());
+  g.resumeFromMismatch(now);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
+  while (g.phase() == Phase::Removing && now < 40000) {
+    now += 5;
+    step(g, mc, now);
+  }
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+  TEST_ASSERT_TRUE(g.reserveUsed(-1)[3]);
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, -1.0f, vg.headR());
+  TEST_ASSERT_EQUAL_INT((int)MagnetMode::Off, (int)vg.magnetMode());
+}
+
+// While paused by a mismatch: squares where a piece should be are white, squares where no piece
+// should be blink red; held destinations stay blue. Outside a mismatch pause the cells are ignored.
+void test_led_mismatch_colors() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 3, 3000));
+  bool mm[49] = {};
+  mm[6 * 7 + 1] = true;  // human piece expected, gone
+  mm[0 * 7 + 5] = true;  // machine piece expected
+  mm[4 * 7 + 5] = true;  // nothing expected, a piece is there
+  Rgb out[49];
+  ledPlan(g, mc, 3000, out, mm);
+  ASSERT_RGB(LED_OFF, out[6 * 7 + 1]);  // no mismatch pause yet
+  ASSERT_RGB(LED_OFF, out[4 * 7 + 5]);
+  const int cells[] = {6 * 7 + 1, 0 * 7 + 5, 4 * 7 + 5};
+  g.pauseForMismatch(cells, 3, 3000);
+  ledPlan(g, mc, 3000, out, mm);
+  ASSERT_RGB(LED_WHITE, out[6 * 7 + 1]);  // over the cooldown red
+  ASSERT_RGB(LED_WHITE, out[0 * 7 + 5]);
+  ASSERT_RGB(LED_RED, out[4 * 7 + 5]);
+  ASSERT_RGB(LED_BLUE, out[5 * 7 + 3]);  // held piece's destinations as usual
+  ASSERT_RGB(LED_OFF, out[6 * 7 + 3]);   // its origin is not a mismatch
+  ledPlan(g, mc, 3000 + LED_MISMATCH_BLINK_MS, out, mm);
+  ASSERT_RGB(LED_WHITE, out[6 * 7 + 1]);
+  ASSERT_RGB(LED_OFF, out[4 * 7 + 5]);
+  ledPlan(g, mc, 3000 + 2 * LED_MISMATCH_BLINK_MS, out, mm);
+  ASSERT_RGB(LED_RED, out[4 * 7 + 5]);
+  // Without the cells: no mismatch layer.
+  ledPlan(g, mc, 3000, out);
+  ASSERT_RGB(LED_OFF, out[4 * 7 + 5]);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_stage_durations_follow_params);
@@ -659,5 +816,9 @@ int main(int, char**) {
   RUN_TEST(test_led_read_lift_threat_is_yellow);
   RUN_TEST(test_led_removal_blinks_white);
   RUN_TEST(test_led_violation_blinks);
+  RUN_TEST(test_mismatch_resume_countdown_reads_ahead);
+  RUN_TEST(test_mismatch_countdown_result_dropped_when_reset);
+  RUN_TEST(test_mismatch_pause_during_removal_finishes_square);
+  RUN_TEST(test_led_mismatch_colors);
   return UNITY_END();
 }

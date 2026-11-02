@@ -220,6 +220,72 @@ static void test_diff_initial() {
   TEST_ASSERT_EQUAL_INT(8, out[2]);
 }
 
+// The Place event carries the time the piece was first seen (placedAt for Game::onHumanPlace).
+static void test_watch_place_carries_first_sighting() {
+  int8_t exp[MAX_N * MAX_N], sen[MAX_N * MAX_N];
+  bool mc[MAX_N * MAX_N] = {};
+  WatchEvent ev[MAX_WATCH_EVENTS];
+  int n = parseBoard("MMM\n...\nH.H", exp);
+  BoardWatcher w(n);
+  parseBoard("MMM\n.H.\nH.H", sen);
+  TEST_ASSERT_EQUAL_INT(0, w.update(sen, exp, mc, 1003, ev));
+  TEST_ASSERT_EQUAL_INT(0, w.update(sen, exp, mc, 1100, ev));
+  TEST_ASSERT_EQUAL_INT(1, w.update(sen, exp, mc, 1250, ev));
+  TEST_ASSERT_EQUAL_INT(WatchEvent::Place, ev[0].kind);
+  TEST_ASSERT_EQUAL_UINT32(1003, ev[0].at);
+  // Lift and MachineTouch carry the update time.
+  parseBoard("MMM\n.H.\nH..", sen);
+  TEST_ASSERT_EQUAL_INT(1, w.update(sen, exp, mc, 1300, ev));
+  TEST_ASSERT_EQUAL_INT(WatchEvent::Lift, ev[0].kind);
+  TEST_ASSERT_EQUAL_UINT32(1300, ev[0].at);
+}
+
+// After resync, differences that were already reported (and ignored by the game while it was
+// not playing) are reported again: Lift at the next update, Place PLACE_MS after it.
+static void test_watch_resync_reports_again() {
+  int8_t exp[MAX_N * MAX_N], sen[MAX_N * MAX_N];
+  bool mc[MAX_N * MAX_N] = {};
+  WatchEvent ev[MAX_WATCH_EVENTS];
+  int n = parseBoard(START, exp);
+  BoardWatcher w(n);
+  // (2,0) lifted, a piece put on (1,1).
+  parseBoard("MMM\n.H.\n.HH", sen);
+  TEST_ASSERT_EQUAL_INT(1, w.update(sen, exp, mc, 0, ev));  // Lift
+  TEST_ASSERT_EQUAL_INT(1, w.update(sen, exp, mc, 200, ev));  // Place
+  TEST_ASSERT_EQUAL_INT(WatchEvent::Place, ev[0].kind);
+  TEST_ASSERT_EQUAL_INT(0, w.update(sen, exp, mc, 1000, ev));
+  w.resync(sen, exp);
+  int k = w.update(sen, exp, mc, 2000, ev);
+  TEST_ASSERT_EQUAL_INT(1, k);
+  TEST_ASSERT_EQUAL_INT(WatchEvent::Lift, ev[0].kind);
+  TEST_ASSERT_EQUAL_INT(2, ev[0].r);
+  TEST_ASSERT_EQUAL_INT(0, ev[0].c);
+  TEST_ASSERT_EQUAL_INT(0, w.update(sen, exp, mc, 2199, ev));
+  k = w.update(sen, exp, mc, 2200, ev);
+  TEST_ASSERT_EQUAL_INT(1, k);
+  TEST_ASSERT_EQUAL_INT(WatchEvent::Place, ev[0].kind);
+  TEST_ASSERT_EQUAL_INT(1, ev[0].r);
+  TEST_ASSERT_EQUAL_INT(1, ev[0].c);
+  TEST_ASSERT_EQUAL_UINT32(2000, ev[0].at);
+  TEST_ASSERT_EQUAL_INT(0, w.update(sen, exp, mc, 2500, ev));
+}
+
+// resync does not repeat MachineTouch for a machine square that still differs.
+static void test_watch_resync_keeps_machine_touch() {
+  int8_t exp[MAX_N * MAX_N], sen[MAX_N * MAX_N];
+  bool mc[MAX_N * MAX_N] = {};
+  WatchEvent ev[MAX_WATCH_EVENTS];
+  int n = parseBoard(START, exp);
+  BoardWatcher w(n);
+  parseBoard("MM.\nMMM\nHHH", sen);
+  w.resync(sen, exp);
+  TEST_ASSERT_EQUAL_INT(0, w.update(sen, exp, mc, 0, ev));
+  parseBoard(START, sen);
+  TEST_ASSERT_EQUAL_INT(0, w.update(sen, exp, mc, 10, ev));
+  parseBoard("MM.\nMMM\nHHH", sen);
+  TEST_ASSERT_EQUAL_INT(4, w.update(sen, exp, mc, 20, ev));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_classify_thresholds);
@@ -233,5 +299,8 @@ int main(int, char**) {
   RUN_TEST(test_watch_machine_touch);
   RUN_TEST(test_watch_machine_cells_ignored);
   RUN_TEST(test_diff_initial);
+  RUN_TEST(test_watch_place_carries_first_sighting);
+  RUN_TEST(test_watch_resync_reports_again);
+  RUN_TEST(test_watch_resync_keeps_machine_touch);
   return UNITY_END();
 }

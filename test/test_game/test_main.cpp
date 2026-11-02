@@ -769,6 +769,112 @@ void test_paused_and_removing_stop_hold_and_interval_clocks() {
   }
 }
 
+// ---- Board mismatch pause (plan 2026-10-31 3.2) ----
+
+void test_mismatch_pause_from_play_resumes_via_countdown() {
+  Game g;
+  startPlay(g);
+  g.tick(3500);  // clock 500
+  const int cells[] = {6 * 7 + 2};
+  g.pauseForMismatch(cells, 1, 3500);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  TEST_ASSERT_TRUE(g.mismatch());
+  // The human piece that should be on the mismatched square gets a cooldown; the others do not.
+  TEST_ASSERT_EQUAL_UINT32(500 + 3000, piece(g, hId(2)).cooldownUntil);
+  TEST_ASSERT_EQUAL_UINT32(0, piece(g, hId(3)).cooldownUntil);
+  g.tick(5000);
+  TEST_ASSERT_EQUAL_UINT32(500, g.clockMs());
+  // togglePause does not resume while the board disagrees.
+  g.togglePause(5000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  TEST_ASSERT_TRUE(g.mismatch());
+  g.resumeFromMismatch(6000);
+  TEST_ASSERT_FALSE(g.mismatch());
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+  TEST_ASSERT_TRUE(g.mismatchCountdown());
+  g.tick(6999);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+  g.tick(7000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_FALSE(g.mismatchCountdown());
+  TEST_ASSERT_EQUAL_UINT32(500, g.clockMs());
+  // The cooldown runs on the game clock: 3 s of play after the resume.
+  g.tick(9999);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::InCooldown, (int)g.onHumanLift(6, 2, 9999));
+  g.tick(10000);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 2, 10000));
+}
+
+void test_mismatch_cooldown_on_held_piece_put_on_empty_square() {
+  Game g;
+  startPlay(g);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 3, 3000));
+  g.tick(3200);  // clock 200
+  // The held piece was put down where it may not go (diagonal): Illegal, still held.
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Illegal, (int)g.onHumanPlace(5, 4, 3200));
+  const int cells[] = {5 * 7 + 4};
+  g.pauseForMismatch(cells, 1, 3500);  // clock 500
+  TEST_ASSERT_EQUAL_UINT32(500 + 3000, piece(g, hId(3)).cooldownUntil);
+  TEST_ASSERT_TRUE(piece(g, hId(3)).held);
+  g.resumeFromMismatch(5000);
+  g.tick(6000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  // Put back on its square: a cancel keeps the cooldown from the pause.
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Cancelled, (int)g.onHumanPlace(6, 3, 6000));
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::InCooldown, (int)g.onHumanLift(6, 3, 6000));
+}
+
+void test_mismatch_pause_from_removing_resumes_removing() {
+  Game g;
+  startPlay(g);
+  teleport(g, hId(0), 3, 2);
+  teleport(g, mId(0), 3, 3);
+  g.onHumanLift(6, 4, 3000);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 4, 3000));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
+  const int cells[] = {3 * 7 + 2};
+  g.pauseForMismatch(cells, 1, 3100);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  TEST_ASSERT_TRUE(g.mismatch());
+  TEST_ASSERT_EQUAL_UINT32(0 + 3000, piece(g, hId(0)).cooldownUntil);
+  g.togglePause(3500);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  g.resumeFromMismatch(4000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Removing, (int)g.phase());
+  TEST_ASSERT_FALSE(g.mismatch());
+  TEST_ASSERT_FALSE(g.mismatchCountdown());
+  g.onRemoved(mId(0), -1, 3);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+}
+
+void test_mismatch_pause_only_from_play_or_removing() {
+  Game g;
+  const int cells[] = {6 * 7 + 0};
+  g.pauseForMismatch(cells, 1, 0);  // Ready
+  TEST_ASSERT_EQUAL_INT((int)Phase::Ready, (int)g.phase());
+  TEST_ASSERT_FALSE(g.mismatch());
+  g.start(0);
+  g.pauseForMismatch(cells, 1, 100);  // Countdown
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+  TEST_ASSERT_FALSE(g.mismatch());
+  g.tick(3000);
+  g.togglePause(3100);  // paused by the person
+  g.pauseForMismatch(cells, 1, 3200);
+  TEST_ASSERT_FALSE(g.mismatch());
+  // Resume without a mismatch pause does nothing.
+  g.resumeFromMismatch(3300);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  g.togglePause(3400);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+  TEST_ASSERT_FALSE(g.mismatchCountdown());
+  // reset clears the mark.
+  g.tick(4400);
+  g.pauseForMismatch(cells, 1, 4400);
+  TEST_ASSERT_TRUE(g.mismatch());
+  g.reset();
+  TEST_ASSERT_FALSE(g.mismatch());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_initial_position);
@@ -807,5 +913,9 @@ int main(int, char**) {
   RUN_TEST(test_time_limit_more_captures_wins);
   RUN_TEST(test_time_limit_equal_captures_is_draw);
   RUN_TEST(test_paused_and_removing_stop_hold_and_interval_clocks);
+  RUN_TEST(test_mismatch_pause_from_play_resumes_via_countdown);
+  RUN_TEST(test_mismatch_cooldown_on_held_piece_put_on_empty_square);
+  RUN_TEST(test_mismatch_pause_from_removing_resumes_removing);
+  RUN_TEST(test_mismatch_pause_only_from_play_or_removing);
   return UNITY_END();
 }

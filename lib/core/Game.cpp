@@ -41,6 +41,9 @@ void Game::reset() {
   std::memset(reserveUsed_, 0, sizeof(reserveUsed_));
   stuckId_ = -1;
   violation_ = Violation{false, -1, -1, 0};
+  mismatch_ = false;
+  mismatchFrom_ = Phase::Play;
+  mismatchCountdown_ = false;
 }
 
 PieceView* Game::byId(int id) {
@@ -76,6 +79,7 @@ void Game::advance(uint32_t now) {
 
 void Game::enterCountdown(uint32_t ms, bool fresh) {
   phase_ = Phase::Countdown;
+  mismatchCountdown_ = false;
   countdownLeft_ = ms;
   countdownFresh_ = fresh;
 }
@@ -93,7 +97,10 @@ void Game::start(uint32_t now) {
 
 void Game::tick(uint32_t now) {
   advance(now);
-  if (phase_ == Phase::Countdown && countdownLeft_ == 0) phase_ = Phase::Play;
+  if (phase_ == Phase::Countdown && countdownLeft_ == 0) {
+    phase_ = Phase::Play;
+    mismatchCountdown_ = false;
+  }
   runTimers(now);
 }
 
@@ -182,8 +189,47 @@ void Game::togglePause(uint32_t now) {
   advance(now);
   if (phase_ == Phase::Play) {
     phase_ = Phase::Paused;
-  } else if (phase_ == Phase::Paused && stuckId_ < 0) {
+  } else if (phase_ == Phase::Paused && stuckId_ < 0 && !mismatch_) {
     enterCountdown(rules_.resumeCountdownMs, false);
+  }
+}
+
+void Game::pauseForMismatch(const int cells[], int count, uint32_t now) {
+  advance(now);
+  if (phase_ != Phase::Play && phase_ != Phase::Removing) return;
+  const int n = rules_.n;
+  const uint32_t until = clock_ + rules_.humanCooldownMs;
+  auto cool = [&](PieceView& p) {
+    if (p.side == HUMAN && p.cooldownUntil < until) p.cooldownUntil = until;
+  };
+  for (int i = 0; i < count; i++) {
+    if (cells[i] < 0 || cells[i] >= n * n) continue;
+    const int r = cells[i] / n, c = cells[i] % n;
+    PieceView* p = pieceAt(r, c);
+    if (p) {
+      cool(*p);
+    } else {
+      for (int h = 0; h < heldCount_; h++) {
+        PieceView* q = byId(held_[h]);
+        if (q) cool(*q);
+      }
+    }
+  }
+  mismatchFrom_ = phase_;
+  phase_ = Phase::Paused;
+  mismatch_ = true;
+}
+
+void Game::resumeFromMismatch(uint32_t now) {
+  advance(now);
+  if (!mismatch_) return;
+  mismatch_ = false;
+  if (phase_ != Phase::Paused) return;
+  if (mismatchFrom_ == Phase::Removing) {
+    phase_ = Phase::Removing;
+  } else {
+    enterCountdown(rules_.resumeCountdownMs, false);
+    mismatchCountdown_ = true;
   }
 }
 

@@ -2,9 +2,12 @@
 #include <cstdint>
 #include "Types.h"
 
+// at: for Place, the time the piece was first seen on the square (the placement time passed to
+// Game::onHumanPlace as placedAt); for Lift and MachineTouch, the update time.
 struct WatchEvent {
   enum Kind { Lift, Place, MachineTouch } kind;
   int r, c;
+  uint32_t at;
 };
 
 // A cell can yield at most two events per update (Lift + MachineTouch).
@@ -31,6 +34,12 @@ class BoardWatcher {
   //    (once per square until it matches again).
   int update(const int8_t sensed[], const int8_t expected[], const bool machineCells[],
              uint32_t now, WatchEvent out[]);
+
+  // Rebuilds the reported marks from the boards, when the game resumes after a board-mismatch
+  // pause (plan 2026-10-31 3.2). Events reported while the game was not playing were ignored by
+  // it, so every current Lift/Place difference is reported again: a Lift at the next update, a
+  // Place PLACE_MS after the next update. MachineTouch differences stay reported (no repeat).
+  void resync(const int8_t sensed[], const int8_t expected[]);
 
   // Squares (r*n+c) where sensed differs from the initial layout `expected`.
   int diffInitial(const int8_t sensed[], const int8_t expected[], int out[]) const;
