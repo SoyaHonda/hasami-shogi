@@ -1,6 +1,7 @@
 #include "SimDriver.h"
 #include <cstring>
 #include "LedPlan.h"
+#include "RaceTime.h"
 
 SimDriver::SimDriver(const Rules& rules, const Params& params, uint32_t seed)
     : rules_(rules),
@@ -11,6 +12,7 @@ SimDriver::SimDriver(const Rules& rules, const Params& params, uint32_t seed)
       bot_(BotParams(), seed),
       botOn_(false),
       now_(0) {
+  bot_.setMachineParams(params);
   reset();
 }
 
@@ -18,6 +20,7 @@ void SimDriver::setParams(const Params& p) {
   params_ = p;
   gantry_.setParams(p);
   controller_.setParams(p);
+  bot_.setMachineParams(p);
 }
 
 void SimDriver::setRules(const Rules& r) {
@@ -42,6 +45,11 @@ void SimDriver::reset() {
   lastCaptured_[0] = lastCaptured_[1] = lastCaptured_[2] = 0;
   saves_ = 0;
   machineMoves_ = 0;
+  reads_ = safeReads_ = lostPredicted_ = 0;
+  std::memset(riskHead_, 0, sizeof(riskHead_));
+  std::memset(riskCount_, 0, sizeof(riskCount_));
+  for (int i = 0; i <= 2 * MAX_N; i++) aliveSeen_[i] = true;
+  riskMarginMs_ = 0;
   eventHead_ = 0;
   eventCount_ = 0;
   eventSeq_ = 0;
@@ -100,7 +108,12 @@ void SimDriver::advance(uint32_t dtMs) {
 
   if (controller_.wantsThink(now_)) {
     const Snapshot snap = controller_.takeSnapshot(now_);
-    const AiMove m = think(snap, params_);
+    AiDebug dbg;
+    const AiMove m = think(snap, params_, &dbg);
+    reads_++;
+    if (dbg.safeCandidates > 0) safeReads_++;
+    riskMarginMs_ = static_cast<uint32_t>(raceTimes(snap, params_).margin);
+    noteRisk(dbg, snap.clockMs);
     const bool wasActive = controller_.job().active;
     controller_.onThinkResult(m, now_);  // always delivered: it clears the awaiting mark
     const JobView j = controller_.job();
@@ -110,10 +123,42 @@ void SimDriver::advance(uint32_t dtMs) {
     }
   }
   if (botOn_) runBot();
+  noteLosses();
+}
+
+void SimDriver::noteRisk(const AiDebug& dbg, uint32_t clock) {
+  const int n = game_.rules().n;
+  for (int i = 0; i < game_.pieceCount(); i++) {
+    const PieceView& p = game_.pieces()[i];
+    if (!p.alive || p.held || p.side != MACHINE || p.id < 1 || p.id > 2 * MAX_N) continue;
+    // The read saw the board at the snapshot; the piece is still on that square (a read happens
+    // only while no job is running).
+    riskHist_[p.id][riskHead_[p.id]] = RiskMark{clock, dbg.pieceRisk[p.r * n + p.c]};
+    riskHead_[p.id] = (riskHead_[p.id] + 1) % RISK_HISTORY;
+    if (riskCount_[p.id] < RISK_HISTORY) riskCount_[p.id]++;
+  }
+}
+
+void SimDriver::noteLosses() {
+  const uint32_t clock = game_.clockMs();
+  for (int i = 0; i < game_.pieceCount(); i++) {
+    const PieceView& p = game_.pieces()[i];
+    if (p.id < 1 || p.id > 2 * MAX_N) continue;
+    const bool was = aliveSeen_[p.id];
+    aliveSeen_[p.id] = p.alive;
+    if (!was || p.alive || p.side != MACHINE) continue;
+    // The latest read at least the margin before the capture.
+    for (int k = 0; k < riskCount_[p.id]; k++) {
+      const RiskMark& mk = riskHist_[p.id][(riskHead_[p.id] - 1 - k + 2 * RISK_HISTORY) % RISK_HISTORY];
+      if (mk.clock + riskMarginMs_ > clock) continue;
+      if (mk.risk >= 0.5f) lostPredicted_++;
+      break;
+    }
+  }
 }
 
 void SimDriver::runBot() {
-  const BotAction a = bot_.decide(game_);
+  const BotAction a = bot_.decide(game_, gantry_.headR(), gantry_.headC());
   if (a.kind == BotAction::Lift) {
     const LiftResult res = lift(a.r, a.c);
     bot_.onLifted(game_, res == LiftResult::Ok, a.r, a.c);
@@ -149,6 +194,7 @@ PlaceResult SimDriver::place(int r, int c) {
   for (int i = 0; i < nBefore; i++) heldBefore[i] = game_.heldIds()[i];
   const int capsBefore = game_.captured(HUMAN);
   const PlaceResult res = game_.onHumanPlace(r, c, now_);
+  noteLosses();
   if (res != PlaceResult::Ok && res != PlaceResult::Cancelled) return res;  // Pending: lands in advance()
   // Which piece left the hand?
   int placed = -1;
@@ -212,6 +258,9 @@ State SimDriver::state() const {
   s.capturedMachine = game_.captured(MACHINE);
   s.saves = saves_;
   s.machineMoves = machineMoves_;
+  s.reads = reads_;
+  s.safeReads = safeReads_;
+  s.lostPredicted = lostPredicted_;
   s.stuckId = game_.stuckId();
   s.pendingId = game_.pendingId();
   s.pendingR = game_.pendingCell().r;

@@ -50,6 +50,10 @@ struct State {
   int capturedHuman, capturedMachine;  // pieces captured by the human / by the machine
   int saves;                           // pre-emption successes (5.5)
   int machineMoves;                    // move jobs started
+  // Measuring the read (plan 2026-10-31 3.13): reads made, reads with at least one candidate
+  // the read counted as safe (AiDebug), and machine pieces lost that the read saw coming
+  // (risk >= 0.5 in the latest read at least the level's margin before the capture).
+  int reads, safeReads, lostPredicted;
   int stuckId;
   // Held piece whose placement is pending and its target square (-1 when none).
   int pendingId, pendingR, pendingC;
@@ -95,6 +99,10 @@ class SimDriver {
   // A human placement landed at (r,c): log captures and a pre-emption success.
   void notePlaced(int id, int r, int c, int capsBefore);
   void pushEvent(EventKind kind, int8_t side, int count, int r, int c);
+  // Records each machine piece's risk from a read at game clock `clock`.
+  void noteRisk(const AiDebug& dbg, uint32_t clock);
+  // Machine pieces captured since the last call: count those the read saw coming.
+  void noteLosses();
 
   Rules rules_;
   Params params_;
@@ -109,6 +117,18 @@ class SimDriver {
   int lastCaptured_[3];
   int saves_;
   int machineMoves_;
+  int reads_, safeReads_, lostPredicted_;
+  // Recent reads per machine piece id (ring buffer): game clock and the piece's risk.
+  static constexpr int RISK_HISTORY = 32;
+  struct RiskMark {
+    uint32_t clock;
+    float risk;
+  };
+  RiskMark riskHist_[2 * MAX_N + 1][RISK_HISTORY];
+  int riskHead_[2 * MAX_N + 1];
+  int riskCount_[2 * MAX_N + 1];
+  bool aliveSeen_[2 * MAX_N + 1];
+  uint32_t riskMarginMs_;
   SimEvent events_[MAX_EVENTS];  // ring buffer
   int eventHead_;                // index of the next write
   int eventCount_;

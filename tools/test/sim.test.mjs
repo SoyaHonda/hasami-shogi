@@ -42,7 +42,7 @@ test('defaults() returns the C++ defaults', () => {
   assert.equal(d.params.humanLiftMs, 150);
   assert.equal(d.params.humanPlaceMs, 350);
   assert.equal(d.params.humanReactMs, 300);
-  assert.deepEqual(d.bot, { reactMs: 400, holdMs: 600, greed: 0.8 });
+  assert.deepEqual(d.bot, { reactMs: 400, moveMs: 500, moveJitter: 0.4, greed: 0.8, style: m.BotStyle.Random });
 });
 
 test('state() shape of a new 7x7 game', () => {
@@ -164,4 +164,23 @@ test('same seed, same game', () => {
       return [s.phase.value, s.clockMs, s.capturedHuman, s.capturedMachine, s.machineMoves, s.cells.join('')];
     });
   assert.deepEqual(run(5), run(5));
+});
+
+test('bot styles by name or enum, and the read counters in state()', () => {
+  for (const style of ['random', 'trap', 'race', 'race3', m.BotStyle.Race]) {
+    withSim([{}, {}, 2], (sim) => {
+      sim.enableBot({ style });
+      sim.start();
+      for (let i = 0; i < 3000; i++) sim.advance(10);
+      const s = sim.state();
+      assert.ok(s.reads > 0, `${style}: reads`);
+      assert.ok(s.safeReads >= 0 && s.safeReads <= s.reads);
+      assert.ok(s.lostPredicted >= 0 && s.lostPredicted <= s.capturedHuman);
+    });
+  }
+  withSim([], (sim) => {
+    assert.throws(() => sim.enableBot({ style: 'minimax' }), /style/);
+    assert.throws(() => sim.enableBot({ holdMs: 600 }), /holdMs/);
+    assert.throws(() => sim.enableBot({ moveJitter: 2 }), /moveJitter/);
+  });
 });

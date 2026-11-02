@@ -1,6 +1,7 @@
 #include "Ai.h"
 #include <cmath>
 #include <cstdlib>
+#include "RaceTime.h"
 
 // Port of think() from the original simulator (sim/hasami-sim.html). Everything is float and
 // evaluated in the same order as the original so that every build picks the same move.
@@ -59,8 +60,9 @@ float reachWeight(const Ctx& x, const Board& bb, int tr, int tc, int skip) {
 // danger misses: both ends of a machine line empty and each reachable by its own piece, or a
 // machine line already sitting between two human pieces (one steps away, another steps in).
 // The human's cooldowns are per piece, so two pieces can move back to back faster than the
-// machine can react with its single head.
-float danger2(const Ctx& x, Board bb) {
+// machine can react with its single head. With `risk`, also raises risk[square] of every piece of
+// a line to 0.8 x its weight (at most 1; AiDebug).
+float danger2(const Ctx& x, Board bb, float* risk = nullptr) {
   float mx = 0.0f, sum = 0.0f;
   for (int i = 0; i < x.n * x.n; i++) {
     if (bb.cells[i] != MACHINE) continue;
@@ -99,6 +101,13 @@ float danger2(const Ctx& x, Board bb) {
         }
       }
       const float v = static_cast<float>(len) * w * 0.8f;
+      if (risk) {
+        const float rv = w * 0.8f < 1.0f ? w * 0.8f : 1.0f;
+        for (int q = 0; q < len; q++) {
+          float& cell = risk[(r + dr * q) * x.n + (c + dc * q)];
+          if (rv > cell) cell = rv;
+        }
+      }
       if (v > mx) mx = v;
       sum += v;
     }
@@ -122,6 +131,31 @@ float danger(const Ctx& x, Board bb) {
   }
   const float two = danger2(x, bb);
   return (two > mx ? two : mx) + 0.25f * sum;
+}
+
+// The read's danger per machine piece on bb (AiDebug): the largest weight of a threat that
+// captures it with one move, or of a two-move line it is in (danger2), at most 1.
+void pieceRisk(const Ctx& x, Board bb, float risk[]) {
+  for (int i = 0; i < MAX_N * MAX_N; i++) risk[i] = 0.0f;
+  for (int t = 0; t < x.threatCount; t++) {
+    const Threat& h = x.threats[t];
+    const int i = h.r * x.n + h.c;
+    if (!h.held && bb.cells[i] != HUMAN) continue;
+    if (!h.held) bb.cells[i] = EMPTY;
+    const float w = h.w < 1.0f ? h.w : 1.0f;
+    int d[MAX_N * MAX_N];
+    int caps[MAX_N * MAX_N];
+    const int k = dests(bb, h.r, h.c, d);
+    for (int j = 0; j < k; j++) {
+      bb.cells[d[j]] = HUMAN;
+      const int nc = capturesAt(bb, HUMAN, d[j] / bb.n, d[j] % bb.n, caps);
+      bb.cells[d[j]] = EMPTY;
+      for (int m = 0; m < nc; m++)
+        if (w > risk[caps[m]]) risk[caps[m]] = w;
+    }
+    if (!h.held) bb.cells[i] = HUMAN;
+  }
+  danger2(x, bb, risk);
 }
 
 float pressure(const Ctx& x, Board bb) {
@@ -159,7 +193,7 @@ float evalBoard(const Ctx& x, const Board& bb) {
 
 }  // namespace
 
-AiMove think(const Snapshot& s, const Params& p) {
+AiMove think(const Snapshot& s, const Params& p, AiDebug* dbg) {
   Ctx x;
   x.n = s.board.n;
   x.aggr = p.aggression;
@@ -198,6 +232,23 @@ AiMove think(const Snapshot& s, const Params& p) {
 
   const Board& b = s.board;
   AiMove best{true, -1, -1, -1, evalBoard(x, b)};
+  if (dbg) {
+    // The current read has no safety test; a candidate counts as safe when its danger is 0.
+    pieceRisk(x, b, dbg->pieceRisk);
+    RaceLine lines[RACE_MAX_LINES];
+    dbg->lineCount = raceLines(b, MACHINE, lines);
+    for (int i = 0; i < dbg->lineCount; i++) {
+      const RaceLine& L = lines[i];
+      float r = 0.0f;
+      for (int q = 0; q < L.len; q++) {
+        const float v = dbg->pieceRisk[(L.r + L.dr * q) * x.n + (L.c + L.dc * q)];
+        if (v > r) r = v;
+      }
+      dbg->lines[i] = AiLineRisk{L.r, L.c, L.dr, L.dc, L.len, r};
+    }
+    dbg->candidates = 1;
+    dbg->safeCandidates = danger(x, b) == 0.0f ? 1 : 0;
+  }
   // Destinations: held pieces' origins and the pending target are occupied for the machine
   // (plan 2026-10-31 3.1); the evaluation still sees them empty.
   Board bm = b;
@@ -229,6 +280,10 @@ AiMove think(const Snapshot& s, const Params& p) {
       const float tm = std::sqrt(dr * dr + dc * dc) / p.freeSpeed + engageS +
                        static_cast<float>(dist) / p.dragSpeed;
       const float sc = static_cast<float>(nc) * 100.0f + evalBoard(x, b2) - tm * 4.0f - 2.0f;
+      if (dbg) {
+        dbg->candidates++;
+        if (danger(x, b2) == 0.0f) dbg->safeCandidates++;
+      }
       if (sc > best.score + 0.01f) best = AiMove{false, q.id, tr, tc, sc};
     }
   }

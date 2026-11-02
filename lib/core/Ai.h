@@ -46,5 +46,23 @@ struct AiMove {
   float score;
 };
 
-// Machine move choice (pure function of the snapshot). Implemented in Ai.cpp.
-AiMove think(const Snapshot& s, const Params& p);
+// A machine line (a run of machine pieces, plan 2026-10-31 3.4) starting at (r,c) in direction
+// (dr,dc) and how likely the read thinks the human captures it.
+struct AiLineRisk {
+  int r, c, dr, dc, len;
+  float risk;  // 0..1
+};
+
+// What a read saw, for measuring the read (plan 2026-10-31 3.13). Filled only when asked for.
+struct AiDebug {
+  AiLineRisk lines[4 * MAX_N];
+  int lineCount;
+  // Risk of the machine piece on each square (r*n+c) on the snapshot's board; 0 elsewhere.
+  float pieceRisk[MAX_N * MAX_N];
+  // Candidate moves ("stay" included) and how many of them the read counts as safe.
+  int candidates, safeCandidates;
+};
+
+// Machine move choice (pure function of the snapshot). Implemented in Ai.cpp. With `dbg`, also
+// writes what the read saw there (does not change the move).
+AiMove think(const Snapshot& s, const Params& p, AiDebug* dbg = nullptr);

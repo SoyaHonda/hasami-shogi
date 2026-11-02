@@ -110,14 +110,29 @@ Params paramsFrom(const val& o) {
   return p;
 }
 
+BotStyle styleFrom(const val& v) {
+  if (v.typeOf().as<std::string>() == "string") {
+    const std::string s = v.as<std::string>();
+    if (s == "random" || s == "Random") return BotStyle::Random;
+    if (s == "trap" || s == "Trap") return BotStyle::Trap;
+    if (s == "race" || s == "Race") return BotStyle::Race;
+    if (s == "race3" || s == "Race3") return BotStyle::Race3;
+    throwType("unknown bot style: " + s);
+  }
+  return v.as<BotStyle>();
+}
+
 BotParams botFrom(const val& o) {
   BotParams b;
   if (!present(o)) return b;
   readObject(o, "bot");
-  checkKeys(o, "bot", {"reactMs", "holdMs", "greed"});
+  checkKeys(o, "bot", {"reactMs", "moveMs", "moveJitter", "greed", "style"});
   take(o, "reactMs", b.reactMs);
-  take(o, "holdMs", b.holdMs);
+  take(o, "moveMs", b.moveMs);
+  take(o, "moveJitter", b.moveJitter);
   take(o, "greed", b.greed);
+  if (present(o["style"])) b.style = styleFrom(o["style"]);
+  if (!(b.moveJitter >= 0.0f && b.moveJitter <= 1.0f)) throwType("bot.moveJitter must be 0..1");
   return b;
 }
 
@@ -157,8 +172,10 @@ val paramsToVal(const Params& p) {
 val botToVal(const BotParams& b) {
   val o = val::object();
   o.set("reactMs", b.reactMs);
-  o.set("holdMs", b.holdMs);
+  o.set("moveMs", b.moveMs);
+  o.set("moveJitter", shortest(b.moveJitter));
   o.set("greed", shortest(b.greed));
+  o.set("style", b.style);
   return o;
 }
 
@@ -217,6 +234,9 @@ val stateToVal(const State& s) {
   o.set("capturedMachine", s.capturedMachine);
   o.set("saves", s.saves);
   o.set("machineMoves", s.machineMoves);
+  o.set("reads", s.reads);
+  o.set("safeReads", s.safeReads);
+  o.set("lostPredicted", s.lostPredicted);
   o.set("stuckId", s.stuckId);
   o.set("pendingId", s.pendingId);  // -1 when no placement is pending
   o.set("pendingR", s.pendingR);
@@ -317,6 +337,11 @@ EMSCRIPTEN_BINDINGS(hasami) {
       .value("Draw", Winner::Draw);
   enum_<Level>("Level").value("Easy", Level::Easy).value("Normal", Level::Normal).value("Hard", Level::Hard);
   enum_<Stage>("Stage").value("Travel", Stage::Travel).value("Engage", Stage::Engage).value("Drag", Stage::Drag);
+  enum_<BotStyle>("BotStyle")
+      .value("Random", BotStyle::Random)
+      .value("Trap", BotStyle::Trap)
+      .value("Race", BotStyle::Race)
+      .value("Race3", BotStyle::Race3);
   enum_<EventKind>("EventKind").value("Capture", EventKind::Capture).value("Save", EventKind::Save);
 
   class_<JsSim>("SimDriver")
