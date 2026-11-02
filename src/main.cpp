@@ -425,12 +425,10 @@ void checkMismatch(uint32_t now) {
     const bool hold = magnetOn();
     const float hr = gantry.headR(), hc = gantry.headC();
     const float rad2 = HallScanner::HOLD_RADIUS * HallScanner::HOLD_RADIUS;
-    const Sq pend = game.pendingCell();
     const int8_t* sensed = scanner.cells();
     for (int i = 0; i < n * n; ++i) {
       const int r = i / n, c = i % n;
       if (skip[i] || game.machineBlocked(r, c)) continue;  // held origins, pending target
-      if (r == pend.r && c == pend.c) continue;
       if (hold) {
         const float dr = static_cast<float>(r) - hr, dc = static_cast<float>(c) - hc;
         if (dr * dr + dc * dc <= rad2) continue;

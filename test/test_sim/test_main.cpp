@@ -702,9 +702,9 @@ void test_trap_c_in_time() {
   // up the open column into its square, with (1,5) and the pieces on row 6 left to answer an
   // escape. Forcing each first move of the machine in turn (every column escape, every move
   // elsewhere) loses the piece against a human playing as fast as the model allows; the column
-  // escapes only survive the Trapper because it never changes the plan it queued. So the test checks the read instead: every piece lost
-  // was seen coming (risk >= 0.5 in the latest read at least the level's margin before the
-  // capture, State::lostPredicted).
+  // escapes only survive the Trapper because it never changes the plan it queued. So the test
+  // checks the read instead: every piece lost was seen coming (risk >= 0.5 in the latest read at
+  // least the level's margin before the capture, State::lostPredicted).
   for (Level lv : {Level::Normal, Level::Hard}) {
     char msg[96];
     int traps = 0, predicted = 0;
