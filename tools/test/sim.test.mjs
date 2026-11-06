@@ -30,6 +30,7 @@ test('defaults() returns the C++ defaults', () => {
     n: 7, target: 4, diffOn: false, diff: 2,
     humanCooldownMs: 3000, machineCooldownMs: 1000, countdownMs: 3000, resumeCountdownMs: 1000,
     maxHeld: 1, humanIntervalMs: 1000, maxHoldMs: 1000, timeLimitMs: 600000,
+    edgeCapture: false, wallLimit: false, untouchedMs: 0,
   });
   assert.equal(d.params.freeSpeed, 4);
   assert.equal(d.params.dragSpeed, 1.5);
@@ -164,6 +165,36 @@ test('same seed, same game', () => {
       return [s.phase.value, s.clockMs, s.capturedHuman, s.capturedMachine, s.machineMoves, s.cells.join('')];
     });
   assert.deepEqual(run(5), run(5));
+});
+
+test('rule candidates: RW opens with one move each, then Play', () => {
+  withSim([{ edgeCapture: true, wallLimit: true, untouchedMs: 20000 }, {}, 4], (sim) => {
+    let s = sim.state();
+    assert.equal(s.openingHuman, false);
+    assert.equal(s.openingMachine, false);
+    sim.start();
+    for (let i = 0; i < 300 && sim.phase() !== m.Phase.Opening; i++) sim.advance(10);
+    assert.equal(sim.phase(), m.Phase.Opening);
+    assert.equal(sim.lift(6, 2), m.LiftResult.Ok);
+    assert.equal(sim.place(4, 2), m.PlaceResult.Ok);
+    assert.equal(sim.lift(6, 3), m.LiftResult.OpeningDone);
+    s = sim.state();
+    assert.equal(s.openingHuman, true);
+    assert.equal(s.clockMs, 0);
+    // The machine reads and makes its one move; then Play.
+    for (let i = 0; i < 1000 && sim.phase() !== m.Phase.Play; i++) sim.advance(10);
+    s = sim.state();
+    assert.equal(s.phase, m.Phase.Play);
+    assert.equal(s.openingMachine, true);
+    assert.equal(s.machineMoves, 1);
+    assert.equal(s.cells.filter((v, i) => v === 2 && i < 7).length, 6); // one piece left row 0
+  });
+  withSim([], (sim) => {
+    const s = sim.state();
+    assert.equal(s.openingHuman, true);
+    assert.equal(s.openingMachine, true);
+  });
+  assert.throws(() => new m.SimDriver({ edge: true }, {}, 1), /edge/);
 });
 
 test('bot styles by name or enum, and the read counters in state()', () => {

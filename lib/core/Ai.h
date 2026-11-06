@@ -5,7 +5,9 @@
 #include "Types.h"
 
 // One piece as Game holds it and as Ai reads it. cooldownUntil and liftedAt are on the game
-// clock; liftedAt is the time a held piece was lifted (meaningful only while held).
+// clock; liftedAt is the time a held piece was lifted (meaningful only while held). movedAt is
+// when it was last moved to another square (0 at the start; a cancel or the hold limit putting it
+// back does not count): RU (plan 2026-11-06 3.1) takes a piece untouched for Rules::untouchedMs.
 struct PieceView {
   int id;
   int8_t side;
@@ -13,6 +15,7 @@ struct PieceView {
   uint32_t cooldownUntil;
   bool alive, held;
   uint32_t liftedAt = 0;
+  uint32_t movedAt = 0;
 };
 
 // Copy of the position handed to think(). `board` excludes held pieces.
@@ -37,6 +40,12 @@ struct Snapshot {
   int reservedR = -1, reservedC = -1;
   // Rule times the read needs (copied from Rules by Game::snapshot; defaults match Rules).
   uint32_t humanCooldownMs = 3000, machineCooldownMs = 1000, humanIntervalMs = 1000, maxHoldMs = 1000;
+  // Rule candidates of plan 2026-11-06 3.1 (copied from Rules by Game::snapshot; off = R0): RE,
+  // RW and RU. The read judges captures and legal moves with them (Capture.h).
+  bool edgeCapture = false, wallLimit = false;
+  uint32_t untouchedMs = 0;
+  // Opening (RW): the machine has its one opening move to make, so "stay" is not a candidate.
+  bool mustMove = false;
 };
 
 struct AiMove {
@@ -79,7 +88,9 @@ struct AiCandidate {
   float penalty;  // fork penalty taken off (Hard, top three safe candidates)
 };
 
-// "Stay" plus every legal move of up to MAX_N machine pieces.
+// "Stay" plus every legal move of up to MAX_N machine pieces. Under RW a move that makes a wall
+// is not legal, so it is no candidate. With Snapshot::mustMove "stay" is listed but never
+// contends.
 constexpr int AI_MAX_CANDIDATES = 1 + MAX_N * 2 * (MAX_N - 1);
 
 // Machine move choice (plan 2026-10-31 3.9-3.11; pure function of the snapshot). Implemented in

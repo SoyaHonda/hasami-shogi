@@ -795,6 +795,46 @@ void test_led_mismatch_colors() {
   ASSERT_RGB(LED_OFF, out[4 * 7 + 5]);
 }
 
+// RE (plan 2026-11-06 3.1): the last empty neighbour of an edge group is lit with the edge hint.
+void test_led_edge_hint() {
+  for (int edge = 0; edge < 2; edge++) {
+    Rules rules;
+    rules.edgeCapture = edge == 1;
+    Game g(rules);
+    startPlay(g);
+    Params p;
+    VirtualGantry vg(p, 0.0f, 3.0f);
+    MachineController mc(g, vg, p);
+    // M(0,0) alone in the corner with H(1,0) below it: (0,1) is its last empty neighbour.
+    teleport(g, mId(1), 3, 3);
+    teleport(g, hId(0), 1, 0);
+    Rgb out[49];
+    ledPlan(g, mc, 3000, out);
+    ASSERT_RGB(edge ? LED_EDGE_HINT : LED_OFF, out[0 * 7 + 1]);
+    ASSERT_RGB(LED_OFF, out[2 * 7 + 0]);  // H(1,0) still has two
+  }
+}
+
+// RW: a destination where the held piece would make a wall is not lit.
+void test_led_wall_square_is_not_a_destination() {
+  for (int wall = 0; wall < 2; wall++) {
+    Rules rules;
+    rules.wallLimit = wall == 1;
+    Game g(rules);
+    startPlay(g);  // Opening under RW: lifting is allowed there too
+    Params p;
+    VirtualGantry vg(p, 0.0f, 3.0f);
+    MachineController mc(g, vg, p);
+    for (int c = 0; c < 6; c++) teleport(g, hId(c), 3, c);
+    TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 6, 3000));
+    Rgb out[49];
+    ledPlan(g, mc, 3000, out);
+    ASSERT_RGB(wall ? LED_OFF : LED_BLUE, out[3 * 7 + 6]);
+    ASSERT_RGB(LED_BLUE, out[4 * 7 + 6]);
+    ASSERT_RGB(LED_BLUE, out[2 * 7 + 6]);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_stage_durations_follow_params);
@@ -820,5 +860,7 @@ int main(int, char**) {
   RUN_TEST(test_mismatch_countdown_result_dropped_when_reset);
   RUN_TEST(test_mismatch_pause_during_removal_finishes_square);
   RUN_TEST(test_led_mismatch_colors);
+  RUN_TEST(test_led_edge_hint);
+  RUN_TEST(test_led_wall_square_is_not_a_destination);
   return UNITY_END();
 }

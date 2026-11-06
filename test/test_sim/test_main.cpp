@@ -816,6 +816,85 @@ void test_events_are_recorded() {
   TEST_FAIL_MESSAGE("no seeded game had a capture");
 }
 
+// ---- Rule candidates (plan 2026-11-06 3.1) ----
+
+static Rules ruleSet(bool edge, bool wall, uint32_t untouchedMs) {
+  Rules r;
+  r.edgeCapture = edge;
+  r.wallLimit = wall;
+  r.untouchedMs = untouchedMs;
+  return r;
+}
+
+// RW: after the countdown the read and the bot each make one move (the opening), then Play.
+void test_opening_one_move_each_then_play() {
+  for (BotStyle style : {BotStyle::Random, BotStyle::Trap, BotStyle::Race, BotStyle::Race3}) {
+    SimDriver d(ruleSet(true, true, 0), Params(), 7);
+    d.enableBot(botOf(style));
+    d.start();
+    const State s0 = d.state();
+    State s = s0;
+    bool sawOpening = false;
+    for (int i = 0; i < 2000 && s.phase != Phase::Play; i++) {
+      d.advance(10);
+      s = d.state();
+      if (s.phase != Phase::Opening) continue;
+      sawOpening = true;
+      TEST_ASSERT_EQUAL_UINT32(0, s.clockMs);
+    }
+    TEST_ASSERT_TRUE(sawOpening);
+    TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)s.phase);
+    TEST_ASSERT_TRUE(s.openingHuman);
+    TEST_ASSERT_TRUE(s.openingMachine);
+    int movedH = 0, movedM = 0;
+    for (int i = 0; i < s.pieceCount; i++) {
+      const PieceState& a = s0.pieces[i];
+      const PieceState& b = s.pieces[i];
+      if (a.r == b.r && a.c == b.c) continue;
+      if (b.side == HUMAN) {
+        movedH++;
+      } else {
+        movedM++;
+      }
+    }
+    TEST_ASSERT_EQUAL_INT(1, movedH);
+    TEST_ASSERT_EQUAL_INT(1, movedM);
+    TEST_ASSERT_EQUAL_INT(1, s.machineMoves);
+  }
+  // R0 has no opening: the flags read as done from the start.
+  SimDriver r0(Rules(), Params(), 7);
+  TEST_ASSERT_TRUE(r0.state().openingHuman && r0.state().openingMachine);
+}
+
+static bool humanWall(const State& s) {
+  for (int r = 0; r < s.n; r++) {
+    int k = 0;
+    for (int c = 0; c < s.n; c++) k += s.cells[r * s.n + c] == HUMAN;
+    if (k == s.n) return true;
+  }
+  return false;
+}
+
+// Bot games under RE + RW (and RU) end, and the bot never builds a wall after the opening.
+void test_rule_bot_games_finish() {
+  for (uint32_t seed = 1; seed <= 6; seed++) {
+    const uint32_t untouched = seed > 4 ? 20000u : 0u;
+    SimDriver d(ruleSet(true, true, untouched), Params(), seed);
+    d.enableBot(botOf(seed % 2 == 0 ? BotStyle::Race : BotStyle::Random));
+    d.start();
+    State s = d.state();
+    bool opened = false;
+    for (uint32_t t = 0; t < MAX_SIM_MS && s.phase != Phase::Over; t += 10) {
+      d.advance(10);
+      s = d.state();
+      if (s.phase == Phase::Play) opened = true;
+      if (opened) TEST_ASSERT_FALSE(humanWall(s));
+    }
+    TEST_ASSERT_EQUAL_INT((int)Phase::Over, (int)s.phase);
+    TEST_ASSERT_TRUE(opened);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_state_shape_and_manual_play);
@@ -835,5 +914,7 @@ int main(int, char**) {
   RUN_TEST(test_trap_b_in_time);
   RUN_TEST(test_trap_c_in_time);
   RUN_TEST(test_trap_d_in_time);
+  RUN_TEST(test_opening_one_move_each_then_play);
+  RUN_TEST(test_rule_bot_games_finish);
   return UNITY_END();
 }

@@ -12,6 +12,13 @@
 // pieces belong (white) and where none should be (red blink), and play resumes
 // 300 ms after the board agrees again (plan 2026-10-31 3.2).
 //
+// With RW (Rules::wallLimit, plan 2026-11-06 3.1) the countdown leads to the
+// opening move (Phase::Opening). BoardWatcher's Lift and Place go to Game as
+// in Play: Game takes one move per side there (a second lift is refused as a
+// violation, a cancel does not count) and enters Play by itself; the machine
+// reads and moves once through MachineController. The board is watched for
+// mismatches during the opening too.
+//
 // Serial commands (115200 baud, one per line):
 //   scan       print the debounced classification of every square as a grid
 //              (. empty, H human / N pole, M machine / S pole) and raw values
@@ -85,7 +92,7 @@ bool mismatchCells[MAX_N * MAX_N];
 int mismatchList[MAX_N * MAX_N];
 bool diffSinceValid = false, agreeSinceValid = false;
 uint32_t diffSince = 0, agreeSince = 0;
-bool resyncDue = false;  // resync the watcher when Play/Removing comes back
+bool resyncDue = false;  // resync the watcher when Play/Opening/Removing comes back
 
 struct ThinkRequest {
   Snapshot snap;
@@ -144,6 +151,7 @@ const char* phaseName(Phase ph) {
     case Phase::Paused: return "Paused";
     case Phase::Removing: return "Removing";
     case Phase::Over: return "Over";
+    case Phase::Opening: return "Opening";
   }
   return "?";
 }
@@ -414,7 +422,7 @@ void buildMachineCells(bool out[]) {
 void checkMismatch(uint32_t now) {
   const int n = rules.n;
   const Phase ph = game.phase();
-  const bool watching = ph == Phase::Play || ph == Phase::Removing || game.mismatch();
+  const bool watching = ph == Phase::Play || ph == Phase::Opening || ph == Phase::Removing || game.mismatch();
   int count = 0;
   for (int i = 0; i < n * n; ++i) mismatchCells[i] = false;
   if (watching) {
@@ -477,7 +485,7 @@ void handleEvents(uint32_t now) {
   buildMachineCells(machineCells);
   // Back from a mismatch pause: report again what the game ignored while it was not playing.
   const Phase ph0 = game.phase();
-  if (resyncDue && (ph0 == Phase::Play || ph0 == Phase::Removing)) {
+  if (resyncDue && (ph0 == Phase::Play || ph0 == Phase::Opening || ph0 == Phase::Removing)) {
     watcher.resync(scanner.cells(), expected.cells);
     resyncDue = false;
   }

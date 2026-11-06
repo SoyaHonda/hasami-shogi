@@ -2,7 +2,9 @@
 #include <cstdint>
 #include "Ai.h"
 #include "Board.h"
+#include "Capture.h"
 #include "Params.h"
+#include "Rules.h"
 #include "Types.h"
 
 // Time estimates of plan 2026-10-31 3.3-3.8 and 3.10: how soon the human can finish closing
@@ -12,6 +14,12 @@
 // (T_m and gain). Pure functions of the snapshot; every time is float milliseconds measured
 // from the snapshot (now = 0). Only + - * / and sqrt are used so that every build agrees
 // (builds use -ffp-contract=off).
+//
+// The rules in force (plan 2026-11-06 3.1-3.2) come from the snapshot: captures are judged by
+// captures() of Capture.h; under RE an edge group of machine pieces is a threat of its own (a
+// group unit, see RaceLine), closed when the human has filled all its empty neighbours (the
+// custodian lines that reach the edge stay out of the custodian rule's reach); under RW neither
+// side's moves may make a wall.
 
 // "Never" (the human cannot close the line, the machine cannot guard it). Check with raceInf()
 // before subtracting: INF - INF and INF - t are meaningless.
@@ -22,18 +30,16 @@ inline bool raceInf(float t) { return !(t < RACE_INF); }
 constexpr float RACE_DANGER_MS = 6000.0f;
 // Most threatened lines whose guard order is searched exhaustively (more: greedy, 3.7).
 constexpr int RACE_EXHAUSTIVE = 3;
-// Upper bound on the lines of one side (each piece is in one row line and one column line).
+// Upper bound on the lines of one side (each piece is in one row line and one column line) plus
+// its RE group units (at most one per piece).
 constexpr int RACE_MAX_LINES = 4 * MAX_N;
 constexpr int RACE_MAX_HUMANS = 2 * MAX_N;
+// RE: an edge group with more empty neighbours than this is not read as threatened (the human
+// would need as many placements, one interval apart).
+constexpr int RACE_GROUP_MAX_FILL = 3;
 
-// Squares as a bit set (MAX_N*MAX_N <= 96 bits).
-struct RaceMask {
-  uint32_t w[3];
-  void clear() { w[0] = w[1] = w[2] = 0; }
-  void set(int i) { w[i >> 5] |= 1u << (i & 31); }
-  bool has(int i) const { return (w[i >> 5] >> (i & 31)) & 1u; }
-  bool any() const { return (w[0] | w[1] | w[2]) != 0; }
-};
+// Squares as a bit set (Board.h).
+using RaceMask = SquareSet;
 
 // Parameters of the race, from the snapshot's rule times and Params (3.3, 3.6, 3.9, 3.11).
 struct RaceTimes {
@@ -44,6 +50,7 @@ struct RaceTimes {
   float freeSpeed, dragSpeed;                          // squares per second
   float margin;                                        // 0 / 200 / 300 ms by level (3.9)
   bool easy;  // Easy: only the held piece's H1 is read (3.11); H2-H4 are INF
+  Rules rules;  // the snapshot's rule candidates (RE, RW, RU) for captures() and walls
 };
 
 // One human piece as the race sees it.
@@ -79,14 +86,20 @@ struct RaceState {
   // is heading anyway) is lifted, or if held placed, no sooner than reactAt. raceInit: 0.
   float reactAt;
   RaceMask planned;
+  bool wall;        // RW: human moves that make a wall are left out of the reach
+  RaceMask stale;   // RU: pieces untouched for Rules::untouchedMs at the snapshot
 };
 
 // A maximal run of `len` pieces of one side starting at (r,c) in direction (dr,dc) (0,1 = row,
 // 1,0 = column). Its ends are (r-dr, c-dc) and (r+dr*len, c+dc*len).
+// A group unit (RE) has dr = dc = 0: the edge group of `len` pieces whose first square is (r,c)
+// on the board it was found on; its "ends" are its empty neighbours (raceUnitSquares,
+// raceUnitEnds).
 struct RaceLine {
   int r, c, dr, dc, len;
   int8_t side;
 };
+inline bool raceIsGroup(const RaceLine& L) { return L.dr == 0 && L.dc == 0; }
 
 // A threatened (or not) machine line after the guard assignment of 3.7.
 struct RaceLineEval {
@@ -115,11 +128,24 @@ int raceMoveMachine(RaceState& st, const RaceTimes& t, int fr, int fc, int tr, i
 int raceLines(const Board& b, int8_t side, RaceLine out[]);
 // The line of `side` through (r,c) in direction (dr,dc) on b (len 0 if (r,c) is not `side`).
 RaceLine raceLineThrough(const Board& b, int8_t side, int r, int c, int dr, int dc);
+// RE: the group unit of the `side` piece on (r,c) on b; len 0 when RE is off, (r,c) holds no
+// `side` piece or its group does not touch the edge.
+RaceLine raceGroupThrough(const Board& b, const RaceTimes& t, int8_t side, int r, int c);
+// The squares (r*n+c) of a unit on b (the board it was found on): a line's run in order, or a
+// group's pieces in square order. Returns the count (out holds MAX_N*MAX_N; bytes to keep the
+// ESP32 think stack low).
+int raceUnitSquares(const Board& b, const RaceLine& L, uint8_t out[]);
+// The ends of a unit on b: a line's ends inside the board (the one before (r,c) first); a
+// group's empty neighbours in square order. Returns the count (out holds MAX_N*MAX_N).
+int raceUnitEnds(const Board& b, const RaceLine& L, uint8_t out[]);
 
 // e(h,s) of 3.5: earliest time human piece index hi can be put on square sq (r*n+c), without the
 // placement interval (callers apply firstPlace and humanInterval). RACE_INF if it cannot.
 float raceHumanPlace(const RaceState& st, const RaceTimes& t, int hi, int sq);
-// T_h of 3.5 for a machine line on st.board.
+// T_h of 3.5 for a machine line on st.board. For a group unit (RE): every empty neighbour filled
+// by a different human piece not next to the group (the pieces next to it stay), as H1 and H2:
+// the first by any piece, each later one by a piece one move away, an interval apart; a group
+// with no empty neighbour falls to an encloser stepping away and a piece coming back (H3, H4).
 float raceHumanTime(const RaceState& st, const RaceTimes& t, const RaceLine& L);
 
 // S(p) of 3.6 for the machine piece on (r,c), the head free at headFree at (headR, headC).
@@ -132,7 +158,8 @@ float raceArrival(const RaceTimes& t, int r, int c, int tr, int tc, float start)
 // through the destination, with the human reacting to the move at `reactAt` (0: at once) for
 // squares outside `planned` (see RaceState::reactAt; null: nothing planned); thRest = least T_h
 // of the lines the rest of its old lines form (no reaction needed). Both on the board after the
-// move, reach rebuilt per 3.6.
+// move, reach rebuilt per 3.6. Under RE the destination's group and the groups left next to the
+// old square count too.
 void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int dr, int dc, float* thDest,
                    float* thRest, float reactAt = 0.0f, const RaceMask* planned = nullptr);
 // Ends of the threatened machine lines (T_h < RACE_DANGER_MS) among ev[0..count).
@@ -148,11 +175,14 @@ float raceReactAt(const RaceState& st, const RaceTimes& t, int r, int c);
 
 // T_h of every machine line, the guard assignment of 3.7 (head from st.headFree/headR/headC) and
 // the risk of each line. Returns the number of lines written to out (RACE_MAX_LINES at most).
+// Under RE the machine's edge groups follow the lines as group units (a guard moves one of the
+// group's pieces out).
 // `lead` is added to every save (guarding needs save + lead + margin <= T_h, and the risk of an
 // unguarded line uses save + lead): "stay" passes the read interval, since its guard starts at
 // the next read at the earliest (plan 2026-10-31 3.9).
 int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], float lead = 0.0f);
-// Risk of each machine piece: the larger risk of the lines it is in (riskAt[r*n+c], 0 elsewhere).
+// Risk of each machine piece: the larger risk of the lines (and group units) it is in
+// (riskAt[r*n+c], 0 elsewhere).
 void racePieceRisk(const Board& b, const RaceLineEval ev[], int count, float riskAt[]);
 
 // 3.8 for a human line: T_m (machine closes both ends), the human's escape time and the gain.

@@ -43,6 +43,11 @@ void Game::reset() {
   mismatch_ = false;
   mismatchFrom_ = Phase::Play;
   mismatchCountdown_ = false;
+  openingDone_[0] = true;
+  openingDone_[HUMAN] = openingDone_[MACHINE] = !rules_.wallLimit;
+  openingMover_ = -1;
+  openingClock_ = 0;
+  liftOpening_ = 0;
 }
 
 PieceView* Game::byId(int id) {
@@ -71,6 +76,8 @@ void Game::advance(uint32_t now) {
     clock_ += dt;
     // The clock stops at the time limit (tick() then ends the game).
     if (rules_.timeLimitMs > 0 && clock_ > rules_.timeLimitMs) clock_ = rules_.timeLimitMs;
+  } else if (phase_ == Phase::Opening) {
+    openingClock_ += dt;
   } else if (phase_ == Phase::Countdown) {
     countdownLeft_ = dt >= countdownLeft_ ? 0 : countdownLeft_ - dt;
   }
@@ -97,13 +104,23 @@ void Game::start(uint32_t now) {
 void Game::tick(uint32_t now) {
   advance(now);
   if (phase_ == Phase::Countdown && countdownLeft_ == 0) {
-    phase_ = Phase::Play;
+    phase_ = openingDone_[HUMAN] && openingDone_[MACHINE] ? Phase::Play : Phase::Opening;
     mismatchCountdown_ = false;
   }
   runTimers(now);
 }
 
 void Game::runTimers(uint32_t now) {
+  if (phase_ == Phase::Opening) {
+    // The game clock is stopped; the hold limit counts on the opening clock (one piece in hand).
+    if (rules_.maxHoldMs > 0) {
+      for (int i = heldCount_ - 1; i >= 0; i--) {
+        PieceView* p = byId(held_[i]);
+        if (p && openingClock_ >= liftOpening_ + rules_.maxHoldMs) expireHold(*p, clock_, now);
+      }
+    }
+    return;
+  }
   if (phase_ != Phase::Play) return;
   // A pending placement lands at the end of the interval if it is still legal; otherwise it is
   // dropped (a violation) and the piece is held again.
@@ -149,8 +166,26 @@ uint32_t Game::clockAt(uint32_t t) const {
   return back >= clock_ ? 0 : clock_ - back;
 }
 
+uint32_t Game::openingClockAt(uint32_t t) const {
+  if (!lastNowValid_ || static_cast<int32_t>(lastNow_ - t) <= 0) return openingClock_;
+  const uint32_t back = lastNow_ - t;
+  return back >= openingClock_ ? 0 : openingClock_ - back;
+}
+
+void Game::finishOpening() {
+  if (phase_ == Phase::Opening && openingDone_[HUMAN] && openingDone_[MACHINE]) phase_ = Phase::Play;
+}
+
+void Game::machineOpeningMove(int pieceId) {
+  if (openingDone_[MACHINE] || openingMover_ != pieceId) return;
+  openingDone_[MACHINE] = true;
+  openingMover_ = -1;
+  finishOpening();
+}
+
 bool Game::placeLegal(const PieceView& p, const Board& b, int r, int c, bool escape) const {
   if (!b.inside(r, c) || b.at(r, c) != EMPTY) return false;
+  if (makesWall(b, rules_, HUMAN, p.r, p.c, r, c)) return false;  // RW
   int d[MAX_N * MAX_N];
   const int k = dests(b, p.r, p.c, d);
   if (!escape) {
@@ -168,9 +203,15 @@ void Game::land(PieceView& p, int r, int c, uint32_t at) {
   p.r = r;
   p.c = c;
   p.cooldownUntil = at + rules_.humanCooldownMs;
+  p.movedAt = at;
   hasLastPlace_ = true;
   lastPlaceClock_ = at;
+  const bool opening = phase_ == Phase::Opening;
   resolveCaptures(HUMAN, r, c);
+  if (opening) {
+    openingDone_[HUMAN] = true;
+    finishOpening();
+  }
 }
 
 void Game::expireHold(PieceView& p, uint32_t at, uint32_t now) {
@@ -179,14 +220,16 @@ void Game::expireHold(PieceView& p, uint32_t at, uint32_t now) {
     pendingR_ = pendingC_ = -1;
   }
   unhold(p.id);
-  p.cooldownUntil = at + rules_.humanCooldownMs;
+  // In Opening the game clock is stopped, so a cooldown would last the whole opening: the piece
+  // only goes back to its square there (a violation).
+  if (phase_ != Phase::Opening) p.cooldownUntil = at + rules_.humanCooldownMs;
   holdTimeouts_++;
   reportViolation(p.r, p.c, now);
 }
 
 void Game::togglePause(uint32_t now) {
   advance(now);
-  if (phase_ == Phase::Play) {
+  if (phase_ == Phase::Play || phase_ == Phase::Opening) {
     phase_ = Phase::Paused;
   } else if (phase_ == Phase::Paused && stuckId_ < 0 && !mismatch_) {
     enterCountdown(rules_.resumeCountdownMs, false);
@@ -195,7 +238,7 @@ void Game::togglePause(uint32_t now) {
 
 void Game::pauseForMismatch(const int cells[], int count, uint32_t now) {
   advance(now);
-  if (phase_ != Phase::Play && phase_ != Phase::Removing) return;
+  if (phase_ != Phase::Play && phase_ != Phase::Removing && phase_ != Phase::Opening) return;
   const int n = rules_.n;
   const uint32_t until = clock_ + rules_.humanCooldownMs;
   auto cool = [&](PieceView& p) {
@@ -234,20 +277,29 @@ void Game::resumeFromMismatch(uint32_t now) {
 
 LiftResult Game::onHumanLift(int r, int c, uint32_t now) {
   advance(now);
-  if (phase_ != Phase::Play) return LiftResult::NotPlaying;
+  const bool opening = phase_ == Phase::Opening;
+  if (phase_ != Phase::Play && !opening) return LiftResult::NotPlaying;
   PieceView* p = pieceAt(r, c);
   if (!p || p->side != HUMAN) return LiftResult::NotHumanPiece;
-  if (clock_ < p->cooldownUntil) {
+  if (opening && openingDone_[HUMAN]) {
+    reportViolation(r, c, now);
+    return LiftResult::OpeningDone;
+  }
+  // Cooldowns run on the game clock, which is stopped in Opening: there they do not hold a lift
+  // (a piece cooled by a mismatch pause would otherwise stay locked for the whole opening, and
+  // with every piece locked the opening could never end). They count from the start of Play.
+  if (!opening && clock_ < p->cooldownUntil) {
     reportViolation(r, c, now);
     return LiftResult::InCooldown;
   }
-  if (heldCount_ >= rules_.maxHeld) {
+  if (heldCount_ >= (opening ? 1 : rules_.maxHeld)) {
     reportViolation(r, c, now);
     return LiftResult::TooMany;
   }
   p->held = true;
   held_[heldCount_++] = p->id;
   p->liftedAt = clock_;
+  liftOpening_ = openingClock_;
   return LiftResult::Ok;
 }
 
@@ -267,7 +319,8 @@ void Game::unhold(int id) {
 
 PlaceResult Game::onHumanPlace(int r, int c, uint32_t now, uint32_t placedAt) {
   advance(now);
-  if (phase_ != Phase::Play) return PlaceResult::NotPlaying;
+  const bool opening = phase_ == Phase::Opening;
+  if (phase_ != Phase::Play && !opening) return PlaceResult::NotPlaying;
   if (heldCount_ == 0) return PlaceResult::NoHeldPiece;
   const uint32_t at = clockAt(placedAt);
   const Board b = boardWithReserve();
@@ -311,13 +364,20 @@ PlaceResult Game::onHumanPlace(int r, int c, uint32_t now, uint32_t placedAt) {
     reportViolation(r, c, now);
     return PlaceResult::Illegal;
   }
-  // Hold limit, judged at the time the piece was put down (a pending piece does not time out).
-  if (chosen->id != pendingId_ && rules_.maxHoldMs > 0 && at >= chosen->liftedAt + rules_.maxHoldMs) {
+  // Hold limit, judged at the time the piece was put down (a pending piece does not time out). In
+  // Opening on the opening clock, the game clock being stopped.
+  if (opening) {
+    if (rules_.maxHoldMs > 0 && openingClockAt(placedAt) >= liftOpening_ + rules_.maxHoldMs) {
+      expireHold(*chosen, clock_, now);
+      return PlaceResult::Illegal;
+    }
+  } else if (chosen->id != pendingId_ && rules_.maxHoldMs > 0 && at >= chosen->liftedAt + rules_.maxHoldMs) {
     expireHold(*chosen, chosen->liftedAt + rules_.maxHoldMs, now);
     return PlaceResult::Illegal;
   }
-  // Placement interval: too early -> pending until the interval has passed (tick lands it).
-  if (hasLastPlace_ && at < lastPlaceClock_ + rules_.humanIntervalMs) {
+  // Placement interval: too early -> pending until the interval has passed (tick lands it). Not
+  // in Opening (one placement there).
+  if (!opening && hasLastPlace_ && at < lastPlaceClock_ + rules_.humanIntervalMs) {
     pendingId_ = chosen->id;
     pendingR_ = r;
     pendingC_ = c;
@@ -340,6 +400,7 @@ bool Game::machineBlocked(int r, int c) const {
 }
 
 bool Game::machineCanEnter(int pieceId, int r, int c) {
+  if (phase_ == Phase::Opening && openingDone_[MACHINE]) return false;  // one move in the opening
   const Board b = boardWithoutHeld();
   if (!b.inside(r, c) || b.at(r, c) != EMPTY || machineBlocked(r, c)) return false;
   if (reservedBy_ >= 0) return reservedBy_ == pieceId && reservedR_ == r && reservedC_ == c;
@@ -355,6 +416,11 @@ void Game::onMachineStep(int pieceId, int r, int c) {
   // A captured piece's removal origin is its square, so moving it updates the origin too.
   p->r = r;
   p->c = c;
+  if (p->alive) {
+    p->movedAt = clock_;
+    // The piece that steps before the machine's opening move is made is that move's piece.
+    if (!openingDone_[MACHINE] && p->side == MACHINE) openingMover_ = pieceId;
+  }
   if (reservedBy_ == pieceId) reservedR_ = reservedC_ = reservedBy_ = -1;
 }
 
@@ -364,7 +430,9 @@ CaptureResult Game::onMachineArrive(int pieceId, uint32_t now) {
   if (!p) return CaptureResult{0, false};
   p->cooldownUntil = clock_ + rules_.machineCooldownMs;
   if (!p->alive || phase_ == Phase::Over) return CaptureResult{0, false};
-  return resolveCaptures(MACHINE, p->r, p->c);
+  const CaptureResult cr = resolveCaptures(MACHINE, p->r, p->c);
+  machineOpeningMove(pieceId);  // a piece that never left its square is not the opening move
+  return cr;
 }
 
 void Game::onMachineAbort(int pieceId, uint32_t now, bool moved) {
@@ -372,7 +440,10 @@ void Game::onMachineAbort(int pieceId, uint32_t now, bool moved) {
   PieceView* p = byId(pieceId);
   if (!p) return;
   if (reservedBy_ == pieceId) reservedR_ = reservedC_ = reservedBy_ = -1;
-  if (moved) p->cooldownUntil = clock_ + rules_.machineCooldownMs;
+  if (moved) {
+    p->cooldownUntil = clock_ + rules_.machineCooldownMs;
+    machineOpeningMove(pieceId);
+  }
 }
 
 Winner Game::decideWinner() const {
@@ -391,7 +462,8 @@ CaptureResult Game::resolveCaptures(int8_t side, int r, int c) {
     if (m && m->alive) b.set(m->r, m->c, EMPTY);
   }
   int caps[MAX_N * MAX_N];
-  const int k = capturesAt(b, side, r, c, caps);
+  const SquareSet untouched = stale();
+  const int k = captures(b, rules_, side, r, c, caps, &untouched);
   if (k == 0) return CaptureResult{0, false};
   int victims[MAX_N * MAX_N];
   int nv = 0;
@@ -474,6 +546,17 @@ void Game::onRemovalStuck(int pieceId, uint32_t now) {
 
 void Game::reportViolation(int r, int c, uint32_t now) { violation_ = Violation{true, r, c, now}; }
 
+SquareSet Game::stale() const {
+  SquareSet s;
+  s.clear();
+  if (rules_.untouchedMs == 0) return s;
+  for (int i = 0; i < count_; i++) {
+    const PieceView& p = pieces_[i];
+    if (p.alive && !p.held && clock_ >= p.movedAt + rules_.untouchedMs) s.set(p.r * rules_.n + p.c);
+  }
+  return s;
+}
+
 Sq Game::reservedCell() const {
   if (reservedBy_ < 0) return Sq{-1, -1};
   return Sq{static_cast<int8_t>(reservedR_), static_cast<int8_t>(reservedC_)};
@@ -534,5 +617,9 @@ Snapshot Game::snapshot(float headR, float headC) const {
   s.machineCooldownMs = rules_.machineCooldownMs;
   s.humanIntervalMs = rules_.humanIntervalMs;
   s.maxHoldMs = rules_.maxHoldMs;
+  s.edgeCapture = rules_.edgeCapture;
+  s.wallLimit = rules_.wallLimit;
+  s.untouchedMs = rules_.untouchedMs;
+  s.mustMove = phase_ == Phase::Opening && !openingDone_[MACHINE];
   return s;
 }

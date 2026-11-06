@@ -72,7 +72,7 @@ Rules rulesFrom(const val& o) {
   readObject(o, "rules");
   checkKeys(o, "rules",
             {"n", "target", "diffOn", "diff", "humanCooldownMs", "machineCooldownMs", "countdownMs", "resumeCountdownMs",
-             "maxHeld", "humanIntervalMs", "maxHoldMs", "timeLimitMs"});
+             "maxHeld", "humanIntervalMs", "maxHoldMs", "timeLimitMs", "edgeCapture", "wallLimit", "untouchedMs"});
   take(o, "n", r.n);
   take(o, "target", r.target);
   take(o, "diffOn", r.diffOn);
@@ -85,6 +85,9 @@ Rules rulesFrom(const val& o) {
   take(o, "humanIntervalMs", r.humanIntervalMs);
   take(o, "maxHoldMs", r.maxHoldMs);
   take(o, "timeLimitMs", r.timeLimitMs);
+  take(o, "edgeCapture", r.edgeCapture);
+  take(o, "wallLimit", r.wallLimit);
+  take(o, "untouchedMs", r.untouchedMs);
   if (r.n < 3 || r.n > MAX_N) throwType("rules.n must be 3.." + std::to_string(MAX_N));
   if (r.maxHeld < 1 || r.maxHeld > 2) throwType("rules.maxHeld must be 1..2");
   return r;
@@ -150,6 +153,9 @@ val rulesToVal(const Rules& r) {
   o.set("humanIntervalMs", r.humanIntervalMs);
   o.set("maxHoldMs", r.maxHoldMs);
   o.set("timeLimitMs", r.timeLimitMs);
+  o.set("edgeCapture", r.edgeCapture);
+  o.set("wallLimit", r.wallLimit);
+  o.set("untouchedMs", r.untouchedMs);
   return o;
 }
 
@@ -241,6 +247,8 @@ val stateToVal(const State& s) {
   o.set("pendingId", s.pendingId);  // -1 when no placement is pending
   o.set("pendingR", s.pendingR);
   o.set("pendingC", s.pendingC);
+  o.set("openingHuman", s.openingHuman);  // RW: the opening move made (true without RW)
+  o.set("openingMachine", s.openingMachine);
   val events = val::array();
   for (int i = 0; i < s.eventCount; i++) {
     const SimEvent& e = s.events[i];
@@ -315,7 +323,8 @@ EMSCRIPTEN_BINDINGS(hasami) {
       .value("InCooldown", LiftResult::InCooldown)
       .value("NotHumanPiece", LiftResult::NotHumanPiece)
       .value("NotPlaying", LiftResult::NotPlaying)
-      .value("TooMany", LiftResult::TooMany);
+      .value("TooMany", LiftResult::TooMany)
+      .value("OpeningDone", LiftResult::OpeningDone);
   enum_<PlaceResult>("PlaceResult")
       .value("Ok", PlaceResult::Ok)
       .value("Cancelled", PlaceResult::Cancelled)
@@ -329,7 +338,8 @@ EMSCRIPTEN_BINDINGS(hasami) {
       .value("Play", Phase::Play)
       .value("Paused", Phase::Paused)
       .value("Removing", Phase::Removing)
-      .value("Over", Phase::Over);
+      .value("Over", Phase::Over)
+      .value("Opening", Phase::Opening);
   enum_<Winner>("Winner")
       .value("None", Winner::None)
       .value("Human", Winner::Human)

@@ -48,6 +48,32 @@ bool parseSquare(const char*& p, int& r, int& c) {
   return true;
 }
 
+// The rules field: '-' or tokens joined by '+'.
+bool parseRules(const char* q, Snapshot& s) {
+  if (std::strcmp(q, "-") == 0) return true;
+  for (;;) {
+    if (std::strncmp(q, "RE", 2) == 0) {
+      s.edgeCapture = true;
+      q += 2;
+    } else if (std::strncmp(q, "RW", 2) == 0) {
+      s.wallLimit = true;
+      q += 2;
+    } else if (std::strncmp(q, "RU", 2) == 0) {
+      q += 2;
+      long ms;
+      if (!parseInt(q, ms) || ms <= 0) return false;
+      s.untouchedMs = static_cast<uint32_t>(ms);
+    } else if (std::strncmp(q, "OPEN", 4) == 0) {
+      s.mustMove = true;
+      q += 4;
+    } else {
+      return false;
+    }
+    if (*q == '\0') return true;
+    if (!expect(q, '+')) return false;
+  }
+}
+
 }  // namespace
 
 bool isAiCaseSkippable(const char* line) {
@@ -58,8 +84,8 @@ bool isAiCaseSkippable(const char* line) {
 
 bool parseAiCase(const char* line, AiCase& out) {
   if (isAiCaseSkippable(line)) return false;
-  // Up to 8 fields: board held head cooldowns [gap lift] params expect.
-  char raw[8][128];
+  // Up to 9 fields: board held head cooldowns [gap lift] params [rules] expect.
+  char raw[9][128];
   int nf = 0;
   const char* p = line;
   for (;;) {
@@ -71,15 +97,18 @@ bool parseAiCase(const char* line, AiCase& out) {
       if (*p && *p != '\n' && *p != '\r') return false;
       break;
     }
-    if (nf >= 8) return false;
+    if (nf >= 9) return false;
     std::memcpy(raw[nf++], buf, sizeof(buf));
     p = q;
   }
-  if (nf != 6 && nf != 8) return false;
-  // f[0..3] board held head cooldowns, f[4] params, f[5] expect; gap and lift ('-' when absent).
-  const char* f[6] = {raw[0], raw[1], raw[2], raw[3], raw[nf - 2], raw[nf - 1]};
-  const char* gapField = nf == 8 ? raw[4] : "-";
-  const char* liftField = nf == 8 ? raw[5] : "-";
+  if (nf != 6 && nf != 8 && nf != 9) return false;
+  // f[0..3] board held head cooldowns, f[4] params, f[5] expect; gap, lift and rules ('-' when
+  // absent).
+  const int pf = nf == 9 ? 6 : nf - 2;  // the params field
+  const char* f[6] = {raw[0], raw[1], raw[2], raw[3], raw[pf], raw[nf - 1]};
+  const char* gapField = nf >= 8 ? raw[4] : "-";
+  const char* liftField = nf >= 8 ? raw[5] : "-";
+  const char* rulesField = nf == 9 ? raw[7] : "-";
 
   out = AiCase{};
   Snapshot& s = out.snap;
@@ -197,6 +226,7 @@ bool parseAiCase(const char* line, AiCase& out) {
     pr.reactMs = static_cast<uint32_t>(react);
     pr.readLift = readLift != 0;
   }
+  if (!parseRules(rulesField, s)) return false;
   if (std::strcmp(f[5], "none") == 0) {
     out.expectNone = true;
     out.fromR = out.fromC = out.toR = out.toC = -1;

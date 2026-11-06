@@ -1,5 +1,16 @@
 #include "MachineController.h"
 #include <cstring>
+#include "Capture.h"
+
+namespace {
+
+// Phases in which the machine moves pieces: Play, and Opening until its opening move is made.
+bool machineMoves(const Game& g) {
+  const Phase ph = g.phase();
+  return ph == Phase::Play || (ph == Phase::Opening && !g.openingDone(MACHINE));
+}
+
+}  // namespace
 
 MachineController::MachineController(Game& game, IGantry& gantry, const Params& params)
     : game_(game),
@@ -12,6 +23,7 @@ MachineController::MachineController(Game& game, IGantry& gantry, const Params& 
       countdownRead_(false),
       hasDeferred_(false),
       deferred_{},
+      openingReadAt_(0),
       active_(false),
       removing_(false),
       pieceId_(-1),
@@ -27,19 +39,22 @@ MachineController::MachineController(Game& game, IGantry& gantry, const Params& 
       pathIdx_(0),
       slotC_(-1) {}
 
-bool MachineController::wantsThink(uint32_t) const {
+bool MachineController::wantsThink(uint32_t now) const {
   if (active_ || awaiting_) return false;
   if (game_.mismatchCountdown()) return !countdownRead_ && !hasDeferred_;
+  const uint32_t interval = params_.reactMs > 150 ? params_.reactMs : 150;
+  if (game_.phase() == Phase::Opening)
+    return !game_.openingDone(MACHINE) && static_cast<int32_t>(now - openingReadAt_) >= static_cast<int32_t>(interval);
   if (game_.phase() != Phase::Play) return false;
   const uint32_t clock = game_.clockMs();
-  const uint32_t interval = params_.reactMs > 150 ? params_.reactMs : 150;
   if (clock >= lastRead_ && clock - lastRead_ >= interval) return true;
   if (params_.readLift && liftPending_ && clock >= liftAt_ && clock - liftAt_ >= params_.reactMs) return true;
   return false;
 }
 
-Snapshot MachineController::takeSnapshot(uint32_t) {
+Snapshot MachineController::takeSnapshot(uint32_t now) {
   lastRead_ = game_.clockMs();
+  if (game_.phase() == Phase::Opening) openingReadAt_ = now;
   liftPending_ = false;
   awaiting_ = true;
   if (game_.mismatchCountdown()) countdownRead_ = true;
@@ -62,7 +77,7 @@ void MachineController::onThinkResult(const AiMove& m, uint32_t now) {
 }
 
 void MachineController::startMove(const AiMove& m, uint32_t now) {
-  if (m.none || active_ || game_.phase() != Phase::Play) return;
+  if (m.none || active_ || !machineMoves(game_)) return;
   if (m.pieceId < 1 || m.pieceId > game_.pieceCount()) return;
   const PieceView& p = game_.pieces()[m.pieceId - 1];
   if (!p.alive || p.held || p.side != MACHINE || game_.clockMs() < p.cooldownUntil) return;
@@ -74,7 +89,7 @@ void MachineController::startMove(const AiMove& m, uint32_t now) {
   bool legal = false;
   for (int i = 0; i < k; i++)
     if (d[i] == target) legal = true;
-  if (!legal) return;
+  if (!legal || makesWall(b, game_.rules(), MACHINE, p.r, p.c, m.toR, m.toC)) return;
 
   gantry_.update(now);  // motions start at this time
   active_ = true;
@@ -102,11 +117,13 @@ void MachineController::update(uint32_t now) {
   // The game clock is frozen outside Play, so this puts the last read at the moment Play
   // resumes (the first read then comes reactMs after the countdown, as in the original).
   if (ph != Phase::Play) lastRead_ = game_.clockMs();
+  // The same for Opening on the caller's clock.
+  if (ph != Phase::Opening) openingReadAt_ = now;
   if (ph != Phase::Countdown) countdownRead_ = false;
   if (hasDeferred_ && ph != Phase::Countdown) {
     // The read made during the mismatch countdown: start it the moment Play comes back.
     hasDeferred_ = false;
-    if (ph == Phase::Play) startMove(deferred_, now);
+    if (machineMoves(game_)) startMove(deferred_, now);
   }
   if (ph == Phase::Ready) {
     // Game was reset: drop whatever was going on.
@@ -132,7 +149,8 @@ void MachineController::updateMoveJob(uint32_t now) {
     dragging_ = false;
     moved_ = true;
     game_.onMachineStep(pieceId_, nextR_, nextC_);
-    if (game_.phase() == Phase::Play && nextR_ == toR_ && nextC_ == toC_) {
+    const Phase phNow = game_.phase();
+    if ((phNow == Phase::Play || phNow == Phase::Opening) && nextR_ == toR_ && nextC_ == toC_) {
       game_.onMachineArrive(pieceId_, now);
       endJob();
       return;
@@ -145,7 +163,7 @@ void MachineController::updateMoveJob(uint32_t now) {
     endJob();
     return;
   }
-  if (ph != Phase::Play) return;  // paused or counting down: hold the job
+  if (ph != Phase::Play && ph != Phase::Opening) return;  // paused or counting down: hold the job
 
   if (stage_ == Stage::Travel) {
     gantry_.magnet(MagnetMode::PullMachine);

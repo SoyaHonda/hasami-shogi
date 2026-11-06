@@ -32,7 +32,7 @@ bool reachesStraight(const Board& b, int r, int c, int tr, int tc) {
 
 // Reach of human piece i on st.board (3.10): one move = destinations from its square; two moves =
 // destinations from each of those with the piece moved there. The reserved square is never a
-// target (nor a first stop).
+// target (nor a first stop), nor (RW) a square where the piece would make a wall.
 void buildReach(RaceState& st, int i) {
   RaceHuman& h = st.h[i];
   h.reach1.clear();
@@ -44,14 +44,14 @@ void buildReach(RaceState& st, int i) {
     for (int rr = h.r + DIR_R[d], cc = h.c + DIR_C[d]; b.inside(rr, cc) && b.cells[rr * n + cc] == EMPTY;
          rr += DIR_R[d], cc += DIR_C[d]) {
       const int f = rr * n + cc;
-      if (f == st.reserved) continue;
+      if (f == st.reserved || (st.wall && completesWall(b, HUMAN, h.r, h.c, rr, cc))) continue;
       h.reach1.set(f);
       // Second move from f: the piece's own square is empty by then.
       for (int e = 0; e < 4; e++) {
         for (int r2 = rr + DIR_R[e], c2 = cc + DIR_C[e]; b.inside(r2, c2); r2 += DIR_R[e], c2 += DIR_C[e]) {
           const int sq = r2 * n + c2;
           if (b.cells[sq] != EMPTY && sq != origin) break;
-          if (sq != st.reserved) h.reach2.set(sq);
+          if (sq != st.reserved && !(st.wall && completesWall(b, HUMAN, h.r, h.c, r2, c2))) h.reach2.set(sq);
         }
       }
     }
@@ -82,9 +82,10 @@ float liftFor(const RaceState& st, const RaceHuman& h, int sq) {
   return reacts(st, sq) ? fmax2(l, st.reactAt) : l;
 }
 
-// H3 and H4 of 3.5: the human piece vi on one end steps away; another piece g (not on the other
-// end, square ob) comes into its square, or vi itself comes back after its cooldown.
-float stepAwayTime(const RaceState& st, const RaceTimes& t, int vi, int ob) {
+// H3 and H4 of 3.5: the human piece vi on one end steps away; another piece g (not one of the
+// pieces in `exclude`, a bit per piece index: the one on the other end, or a group's other
+// enclosers) comes into its square, or vi itself comes back after its cooldown.
+float stepAwayTime(const RaceState& st, const RaceTimes& t, int vi, uint32_t exclude) {
   const RaceHuman& v = st.h[vi];
   if (v.held || v.pending || !v.reach1.any()) return RACE_INF;
   const int vsq = v.r * st.board.n + v.c;
@@ -94,7 +95,7 @@ float stepAwayTime(const RaceState& st, const RaceTimes& t, int vi, int ob) {
   b.set(v.r, v.c, EMPTY);
   for (int g = 0; g < st.hCount; g++) {
     const RaceHuman& h = st.h[g];
-    if (g == vi || g == ob || !h.alive || h.held) continue;
+    if (g == vi || ((exclude >> g) & 1u) || !h.alive || h.held) continue;
     if (!reachesStraight(b, h.r, h.c, v.r, v.c)) continue;
     const float tg = fmax2(fmax2(tv + t.humanInterval, tv + t.humanMove), liftFor(st, h, vsq) + t.humanMove);  // H3
     best = fmin2(best, tg);
@@ -118,6 +119,105 @@ float twoPieces(const RaceState& st, const RaceTimes& t, int a, int b) {
     }
   }
   return best;
+}
+
+// Whether (r,c) is next to a square of the group (and not in it).
+bool nextToGroup(const EdgeGroup& g, int n, int r, int c) {
+  if (g.cells.has(r * n + c)) return false;
+  for (int d = 0; d < 4; d++) {
+    const int rr = r + DIR_R[d], cc = c + DIR_C[d];
+    if (rr >= 0 && rr < n && cc >= 0 && cc < n && g.cells.has(rr * n + cc)) return true;
+  }
+  return false;
+}
+
+// The empty neighbours of a group, filled one by one (RE): every order and every choice of
+// different pieces, the earliest last placement wins.
+struct Fill {
+  const RaceState* st;
+  const RaceTimes* t;
+  int libs[RACE_GROUP_MAX_FILL];
+  int k;
+  float best;
+};
+
+void fillSearch(Fill& f, int depth, int usedLibs, uint32_t usedPieces, float prev) {
+  if (depth == f.k) {
+    if (prev < f.best) f.best = prev;
+    return;
+  }
+  const RaceState& st = *f.st;
+  const RaceTimes& t = *f.t;
+  for (int li = 0; li < f.k; li++) {
+    if ((usedLibs >> li) & 1) continue;
+    const int sq = f.libs[li];
+    for (int i = 0; i < st.hCount; i++) {
+      const RaceHuman& h = st.h[i];
+      if (((usedPieces >> i) & 1u) || !h.alive) continue;
+      float ti;
+      if (depth == 0) {
+        // The first placement as H1 (two-move routes included).
+        const float e = raceHumanPlace(st, t, i, sq);
+        if (raceInf(e)) continue;
+        ti = fmax2(e, st.firstPlace);
+      } else {
+        // Later ones as H2's second piece: one move, not a held piece (it is placed first).
+        if (h.held || !h.reach1.has(sq)) continue;
+        ti = fmax2(fmax2(prev + t.humanInterval, prev + t.humanMove), liftFor(st, h, sq) + t.humanMove);
+      }
+      if (!(ti < f.best)) continue;
+      fillSearch(f, depth + 1, usedLibs | (1 << li), usedPieces | (1u << i), ti);
+    }
+  }
+}
+
+// T_h of a group unit (RE) on st.board; see raceHumanTime.
+float groupTime(const RaceState& st, const RaceTimes& t, const RaceLine& G) {
+  EdgeGroup g;
+  if (G.len <= 0 || !t.rules.edgeCapture || !edgeGroupAt(st.board, G.r, G.c, g) || g.side != MACHINE)
+    return RACE_INF;
+  if (g.libCount > RACE_GROUP_MAX_FILL) return RACE_INF;
+  const int n = st.board.n;
+  // The human pieces next to the group enclose it; moving one opens its square, so they stay.
+  // A pending piece is on its target (st.board) and lands at gap.
+  uint32_t enclosers = 0;
+  bool pendingNext = false;
+  for (int i = 0; i < st.hCount; i++) {
+    const RaceHuman& h = st.h[i];
+    if (!h.alive || h.held || !nextToGroup(g, n, h.r, h.c)) continue;
+    enclosers |= 1u << i;
+    pendingNext = pendingNext || h.pending;
+  }
+  if (g.libCount == 0) {
+    // Enclosed already (the machine entered the spot itself): the next human arrival next to it
+    // captures. A pending placement next to it lands at gap; otherwise an encloser steps away and
+    // a piece comes back into its square.
+    if (pendingNext) return st.gap;
+    if (t.easy) return RACE_INF;
+    float best = RACE_INF;
+    for (int i = 0; i < st.hCount; i++)
+      if ((enclosers >> i) & 1u) best = fmin2(best, stepAwayTime(st, t, i, enclosers));
+    return best;
+  }
+  if (t.easy) {
+    // Easy reads only the held piece's single placement.
+    if (g.libCount != 1) return RACE_INF;
+    float best = RACE_INF;
+    for (int i = 0; i < st.hCount; i++) {
+      if (!st.h[i].held || ((enclosers >> i) & 1u)) continue;
+      const float e = raceHumanPlace(st, t, i, g.libs[0]);
+      if (!raceInf(e)) best = fmin2(best, fmax2(e, st.firstPlace));
+    }
+    return best;
+  }
+  Fill f;
+  f.st = &st;
+  f.t = &t;
+  f.k = g.libCount;
+  for (int i = 0; i < f.k; i++) f.libs[i] = g.libs[i];
+  f.best = RACE_INF;
+  fillSearch(f, 0, 0, enclosers, 0.0f);
+  return f.best;
 }
 
 // Machine board: blocked squares count as occupied.
@@ -146,7 +246,8 @@ float machineFill(const RaceState& st, const RaceTimes& t, const Board& mb, int 
   const int n = mb.n;
   const float start = fmax2(st.mReady[r * n + c], hf) + travelMs(t, r, c, hr, hc) + t.engage;
   float best = RACE_INF;
-  if (reachesStraight(mb, r, c, tr, tc)) best = start + dragMs(t, r, c, tr, tc);
+  if (reachesStraight(mb, r, c, tr, tc) && !makesWall(mb, t.rules, MACHINE, r, c, tr, tc))
+    best = start + dragMs(t, r, c, tr, tc);
   if (!twoMoves) return best;
   Board b = mb;
   int d[MAX_N * MAX_N];
@@ -155,8 +256,9 @@ float machineFill(const RaceState& st, const RaceTimes& t, const Board& mb, int 
   for (int j = 0; j < k; j++) {
     const int xr = d[j] / n, xc = d[j] % n;
     if (xr == tr && xc == tc) continue;
+    if (makesWall(mb, t.rules, MACHINE, r, c, xr, xc)) continue;
     b.cells[d[j]] = MACHINE;
-    if (reachesStraight(b, xr, xc, tr, tc)) {
+    if (reachesStraight(b, xr, xc, tr, tc) && !makesWall(b, t.rules, MACHINE, xr, xc, tr, tc)) {
       const float a1 = start + dragMs(t, r, c, xr, xc);
       const float a2 = a1 + t.machineCooldown + t.engage + dragMs(t, xr, xc, tr, tc);
       best = fmin2(best, a2);
@@ -199,6 +301,7 @@ void addEscapes(const RaceTimes& t, const Board& mb, EscapeTable& et, int r, int
   int d[MAX_N * MAX_N];
   const int k = dests(mb, r, c, d);
   for (int j = 0; j < k && et.used < MAX_ESCAPES; j++) {
+    if (makesWall(mb, t.rules, MACHINE, r, c, d[j] / n, d[j] % n)) continue;  // RW
     Escape x;
     x.dr = static_cast<int8_t>(d[j] / n);
     x.dc = static_cast<int8_t>(d[j] % n);
@@ -216,16 +319,18 @@ void addEscapes(const RaceTimes& t, const Board& mb, EscapeTable& et, int r, int
   }
 }
 
-// save(L) with the head free at hf at (hr,hc): the earliest S over the pieces of L with a safe
-// destination; the guarding move is the one arriving first (the first piece of L and the first
-// destination in dests() order among equals). A piece's escapes are tried by drag time, so the
-// first safe one is its earliest arrival.
+// save(L) with the head free at hf at (hr,hc): the earliest S over the pieces of L (a line's or a
+// group unit's) with a safe destination; the guarding move is the one arriving first (the first
+// piece of L and the first destination in dests() order among equals). A piece's escapes are
+// tried by drag time, so the first safe one is its earliest arrival.
 Guard saveLine(const RaceState& st, const RaceTimes& t, EscapeTable& et, const RaceLine& L, float hf, float hr,
                float hc) {
   Guard g{RACE_INF, RACE_INF, -1, -1, -1, -1};
   const int n = st.board.n;
-  for (int k = 0; k < L.len; k++) {
-    const int r = L.r + L.dr * k, c = L.c + L.dc * k, i = r * n + c;
+  uint8_t sqs[MAX_N * MAX_N];
+  const int count = raceUnitSquares(st.board, L, sqs);
+  for (int k = 0; k < count; k++) {
+    const int i = sqs[k], r = i / n, c = i % n;
     const float S = raceStart(st, t, r, c, hf, hr, hc);
     if (S > g.save) continue;
     for (int j = 0; j < et.count[i]; j++) {
@@ -309,12 +414,30 @@ RaceTimes raceTimes(const Snapshot& s, const Params& p) {
   t.dragSpeed = p.dragSpeed;
   t.easy = p.level == Level::Easy;
   t.margin = p.level == Level::Easy ? 0.0f : p.level == Level::Normal ? 200.0f : 300.0f;
+  t.rules = Rules();
+  t.rules.n = s.board.n;
+  t.rules.humanCooldownMs = s.humanCooldownMs;
+  t.rules.machineCooldownMs = s.machineCooldownMs;
+  t.rules.humanIntervalMs = s.humanIntervalMs;
+  t.rules.maxHoldMs = s.maxHoldMs;
+  t.rules.edgeCapture = s.edgeCapture;
+  t.rules.wallLimit = s.wallLimit;
+  t.rules.untouchedMs = s.untouchedMs;
   return t;
 }
 
 void raceInit(RaceState& st, const Snapshot& s, const RaceTimes& t) {
   st.board = s.board;
   const int n = st.board.n;
+  st.wall = t.rules.wallLimit;
+  st.stale.clear();
+  if (t.rules.untouchedMs > 0) {
+    for (int i = 0; i < s.count; i++) {
+      const PieceView& q = s.pieces[i];
+      if (q.alive && !q.held && st.board.inside(q.r, q.c) && s.clockMs >= q.movedAt + t.rules.untouchedMs)
+        st.stale.set(q.r * n + q.c);
+    }
+  }
   std::memset(st.blocked, 0, sizeof(st.blocked));
   std::memset(st.mReady, 0, sizeof(st.mReady));
   std::memset(st.mId, 0, sizeof(st.mId));
@@ -408,13 +531,18 @@ int raceMoveMachine(RaceState& st, const RaceTimes& t, int fr, int fc, int tr, i
   st.mId[to] = st.mId[from];
   st.mReady[from] = 0.0f;
   st.mId[from] = 0;
+  st.stale.reset(from);
+  st.stale.reset(to);
   // Captures on the real board: the pending target is still empty there.
   Board real = st.board;
   for (int i = 0; i < st.hCount; i++)
     if (st.h[i].alive && st.h[i].pending) real.set(st.h[i].r, st.h[i].c, EMPTY);
   int caps[MAX_N * MAX_N];
-  const int k = capturesAt(real, MACHINE, tr, tc, caps);
-  for (int i = 0; i < k; i++) st.board.cells[caps[i]] = EMPTY;
+  const int k = captures(real, t.rules, MACHINE, tr, tc, caps, &st.stale);
+  for (int i = 0; i < k; i++) {
+    st.board.cells[caps[i]] = EMPTY;
+    st.stale.reset(caps[i]);
+  }
   st.headFree = arrival;
   st.headR = static_cast<float>(tr);
   st.headC = static_cast<float>(tc);
@@ -453,6 +581,45 @@ int raceLines(const Board& b, int8_t side, RaceLine out[]) {
   return k;
 }
 
+RaceLine raceGroupThrough(const Board& b, const RaceTimes& t, int8_t side, int r, int c) {
+  RaceLine L{r, c, 0, 0, 0, side};
+  if (!t.rules.edgeCapture || !b.inside(r, c) || b.at(r, c) != side) return L;
+  EdgeGroup g;
+  if (!edgeGroupAt(b, r, c, g)) return L;
+  L.r = g.first / b.n;
+  L.c = g.first % b.n;
+  L.len = g.size;
+  return L;
+}
+
+int raceUnitSquares(const Board& b, const RaceLine& L, uint8_t out[]) {
+  if (!raceIsGroup(L)) {
+    for (int k = 0; k < L.len; k++) out[k] = static_cast<uint8_t>((L.r + L.dr * k) * b.n + (L.c + L.dc * k));
+    return L.len > 0 ? L.len : 0;
+  }
+  EdgeGroup g;
+  if (L.len <= 0 || !edgeGroupAt(b, L.r, L.c, g)) return 0;
+  int k = 0;
+  for (int sq = 0; sq < b.n * b.n; sq++)
+    if (g.cells.has(sq)) out[k++] = static_cast<uint8_t>(sq);
+  return k;
+}
+
+int raceUnitEnds(const Board& b, const RaceLine& L, uint8_t out[]) {
+  int k = 0;
+  if (!raceIsGroup(L)) {
+    const int ar = L.r - L.dr, ac = L.c - L.dc, br = L.r + L.dr * L.len, bc = L.c + L.dc * L.len;
+    if (b.inside(ar, ac)) out[k++] = static_cast<uint8_t>(ar * b.n + ac);
+    if (b.inside(br, bc)) out[k++] = static_cast<uint8_t>(br * b.n + bc);
+    return k;
+  }
+  EdgeGroup g;
+  if (L.len <= 0 || !edgeGroupAt(b, L.r, L.c, g)) return 0;
+  for (int sq = 0; sq < b.n * b.n; sq++)
+    if (b.cells[sq] == EMPTY && nextToGroup(g, b.n, sq / b.n, sq % b.n)) out[k++] = static_cast<uint8_t>(sq);
+  return k;
+}
+
 float raceHumanPlace(const RaceState& st, const RaceTimes& t, int hi, int sq) {
   const RaceHuman& h = st.h[hi];
   if (!h.alive) return RACE_INF;
@@ -479,6 +646,7 @@ float raceHumanPlace(const RaceState& st, const RaceTimes& t, int hi, int sq) {
 }
 
 float raceHumanTime(const RaceState& st, const RaceTimes& t, const RaceLine& L) {
+  if (raceIsGroup(L)) return groupTime(st, t, L);
   const Board& b = st.board;
   const int n = b.n;
   const int ar = L.r - L.dr, ac = L.c - L.dc;
@@ -493,8 +661,8 @@ float raceHumanTime(const RaceState& st, const RaceTimes& t, const RaceLine& L) 
     if ((ha >= 0 && st.h[ha].pending) || (hb >= 0 && st.h[hb].pending)) return st.gap;
     if (t.easy) return RACE_INF;
     float best = RACE_INF;
-    if (ha >= 0) best = fmin2(best, stepAwayTime(st, t, ha, hb));
-    if (hb >= 0) best = fmin2(best, stepAwayTime(st, t, hb, ha));
+    if (ha >= 0) best = fmin2(best, stepAwayTime(st, t, ha, hb >= 0 ? 1u << hb : 0u));
+    if (hb >= 0) best = fmin2(best, stepAwayTime(st, t, hb, ha >= 0 ? 1u << ha : 0u));
     return best;
   }
   if (ca == HUMAN || cb == HUMAN) {
@@ -538,6 +706,8 @@ void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int 
       const int nr = pr + ldr * side, nc = pc + ldc * side;
       if (!b2.inside(nr, nc) || st.board.at(nr, nc) != MACHINE || b2.at(nr, nc) != MACHINE) continue;
       rest = fmin2(rest, raceHumanTime(s2, t, raceLineThrough(b2, MACHINE, nr, nc, ldr, ldc)));
+      // RE: the group it is left in (the old square is a new empty neighbour of it).
+      if (t.rules.edgeCapture) rest = fmin2(rest, raceHumanTime(s2, t, raceGroupThrough(b2, t, MACHINE, nr, nc)));
     }
   }
   s2.reactAt = reactAt;
@@ -550,6 +720,7 @@ void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int 
     const int ldr = dir == 0 ? 0 : 1, ldc = dir == 0 ? 1 : 0;
     dest = fmin2(dest, raceHumanTime(s2, t, raceLineThrough(b2, MACHINE, dr, dc, ldr, ldc)));
   }
+  if (t.rules.edgeCapture) dest = fmin2(dest, raceHumanTime(s2, t, raceGroupThrough(b2, t, MACHINE, dr, dc)));
   *thDest = dest;
   *thRest = rest;
 }
@@ -558,10 +729,9 @@ void racePlanned(const Board& b, const RaceLineEval ev[], int count, RaceMask* o
   out->clear();
   for (int i = 0; i < count; i++) {
     if (!ev[i].danger) continue;
-    const RaceLine& L = ev[i].line;
-    const int ar = L.r - L.dr, ac = L.c - L.dc, br = L.r + L.dr * L.len, bc = L.c + L.dc * L.len;
-    if (b.inside(ar, ac)) out->set(ar * b.n + ac);
-    if (b.inside(br, bc)) out->set(br * b.n + bc);
+    uint8_t ends[MAX_N * MAX_N];
+    const int k = raceUnitEnds(b, ev[i].line, ends);
+    for (int j = 0; j < k; j++) out->set(ends[j]);
   }
 }
 
@@ -580,7 +750,23 @@ bool raceSafeDest(const RaceState& st, const RaceTimes& t, int pr, int pc, int d
 
 int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], float lead) {
   RaceLine lines[RACE_MAX_LINES];
-  const int k = raceLines(st.board, MACHINE, lines);
+  int k = raceLines(st.board, MACHINE, lines);
+  if (t.rules.edgeCapture) {
+    // RE: the machine's edge groups, each once, after the lines.
+    const int n = st.board.n;
+    RaceMask seen;
+    seen.clear();
+    for (int sq = 0; sq < n * n && k < RACE_MAX_LINES; sq++) {
+      if (st.board.cells[sq] != MACHINE || seen.has(sq)) continue;
+      EdgeGroup g;
+      if (!edgeGroupAt(st.board, sq / n, sq % n, g)) {
+        seen.set(sq);
+        continue;
+      }
+      for (int w = 0; w < 3; w++) seen.w[w] |= g.cells.w[w];
+      lines[k++] = RaceLine{g.first / n, g.first % n, 0, 0, g.size, MACHINE};
+    }
+  }
   int idx[RACE_MAX_LINES];
   int m = 0;
   for (int i = 0; i < k; i++) {
@@ -610,9 +796,11 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
   for (int i = 0; i < MAX_N * MAX_N; i++) et.count[i] = -1;
   racePlanned(st.board, out, k, &et.planned);
   const Board mb = machineBoard(st);
+  const int bn = st.board.n;
   for (int j = 0; j < m; j++) {
-    const RaceLine& L = out[idx[j]].line;
-    for (int q = 0; q < L.len; q++) addEscapes(t, mb, et, L.r + L.dr * q, L.c + L.dc * q);
+    uint8_t sqs[MAX_N * MAX_N];
+    const int count = raceUnitSquares(st.board, out[idx[j]].line, sqs);
+    for (int q = 0; q < count; q++) addEscapes(t, mb, et, sqs[q] / bn, sqs[q] % bn);
   }
 
   float hf = st.headFree, hr = st.headR, hc = st.headC;
@@ -668,10 +856,11 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
     RaceLineEval& e = out[idx[j]];
     if (e.guarded) continue;
     float lf = hf, lr = hr, lc = hc;
+    uint8_t sqs[MAX_N * MAX_N];
+    const int count = raceUnitSquares(st.board, e.line, sqs);
     for (int o = 0; o < guards; o++) {
       bool mine = false;
-      for (int q = 0; q < e.line.len && !mine; q++)
-        mine = e.line.r + e.line.dr * q == gR[o] && e.line.c + e.line.dc * q == gC[o];
+      for (int q = 0; q < count && !mine; q++) mine = sqs[q] == gR[o] * bn + gC[o];
       if (!mine) continue;
       lf = hfAt[o];
       lr = hrAt[o];
@@ -692,11 +881,10 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
 void racePieceRisk(const Board& b, const RaceLineEval ev[], int count, float riskAt[]) {
   for (int i = 0; i < b.n * b.n; i++) riskAt[i] = 0.0f;
   for (int i = 0; i < count; i++) {
-    const RaceLine& L = ev[i].line;
-    for (int k = 0; k < L.len; k++) {
-      const int sq = (L.r + L.dr * k) * b.n + (L.c + L.dc * k);
-      riskAt[sq] = fmax2(riskAt[sq], ev[i].risk);
-    }
+    if (raceIsGroup(ev[i].line) && ev[i].risk == 0.0f) continue;
+    uint8_t sqs[MAX_N * MAX_N];
+    const int k = raceUnitSquares(b, ev[i].line, sqs);
+    for (int j = 0; j < k; j++) riskAt[sqs[j]] = fmax2(riskAt[sqs[j]], ev[i].risk);
   }
 }
 

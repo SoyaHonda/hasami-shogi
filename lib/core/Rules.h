@@ -15,4 +15,18 @@ struct Rules {
   uint32_t maxHoldMs = 1000;
   // Game length (game clock); then the side with more captures wins, equal is a draw. 0 = none.
   uint32_t timeLimitMs = 600000;
+
+  // Rule candidates of plan 2026-11-06 3.1. All off is R0, the rules above. They apply to both
+  // sides alike; the capture judgement is captures() of Capture.h.
+  // RE: the official edge capture. A group of one side's pieces (4-connected) touching the
+  // board's edge is captured when the other side arrives next to it and it has no empty
+  // neighbour left.
+  bool edgeCapture = false;
+  // RW: no placement or machine move may fill a row with one side's pieces from edge to edge
+  // (a wall), and the start countdown leads to Phase::Opening: each side moves one piece to
+  // another square, then Play (the game clock stays stopped until then).
+  bool wallLimit = false;
+  // RU (fallback): a piece not moved to another square for this long (game clock) is captured
+  // when one enemy piece arrives next to it. 0 = off; candidates 20000 and 40000.
+  uint32_t untouchedMs = 0;
 };

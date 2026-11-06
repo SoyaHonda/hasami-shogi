@@ -6,6 +6,11 @@
 // candidates are safe; among the safe ones the attack (gain) and shape points decide; without a
 // safe one, the candidate losing the least is chosen. Pure function of the snapshot, float only
 // (+ - * / and sqrt), so that every build picks the same move (builds use -ffp-contract=off).
+//
+// The rule candidates of plan 2026-11-06 3.1 come with the snapshot: captures are captures() of
+// Capture.h (RE, RU), RE's edge groups are threats of their own (group units of RaceTime), RW
+// leaves wall-making moves out of the candidates, and in the opening (mustMove) "stay" does not
+// contend.
 
 namespace {
 
@@ -129,11 +134,12 @@ bool allGuarded(const RaceLineEval ev[], int k) {
   return true;
 }
 
-// Least T_h of the two lines through the machine piece at (r,c) on st.
+// Least T_h of the two lines (and, under RE, the group) through the machine piece at (r,c) on st.
 float lineTimeAt(const RaceState& st, const RaceTimes& t, int r, int c) {
   float th = RACE_INF;
   for (int dir = 0; dir < 2; dir++)
     th = fmin2(th, raceHumanTime(st, t, raceLineThrough(st.board, MACHINE, r, c, dir, 1 - dir)));
+  if (t.rules.edgeCapture) th = fmin2(th, raceHumanTime(st, t, raceGroupThrough(st.board, t, MACHINE, r, c)));
   return th;
 }
 
@@ -150,6 +156,8 @@ void destTimes(const RaceState& before, RaceState& after, const RaceTimes& t, in
       const int nr = pr + ldr * side, nc = pc + ldc * side;
       if (!b2.inside(nr, nc) || before.board.at(nr, nc) != MACHINE || b2.at(nr, nc) != MACHINE) continue;
       rest = fmin2(rest, raceHumanTime(after, t, raceLineThrough(b2, MACHINE, nr, nc, ldr, ldc)));
+      if (t.rules.edgeCapture)
+        rest = fmin2(rest, raceHumanTime(after, t, raceGroupThrough(b2, t, MACHINE, nr, nc)));
     }
   }
   after.reactAt = reactAt;
@@ -158,14 +166,17 @@ void destTimes(const RaceState& before, RaceState& after, const RaceTimes& t, in
     const int ldr = dir == 0 ? 0 : 1, ldc = dir == 0 ? 1 : 0;
     dest = fmin2(dest, raceHumanTime(after, t, raceLineThrough(b2, MACHINE, dr, dc, ldr, ldc)));
   }
+  if (t.rules.edgeCapture) dest = fmin2(dest, raceHumanTime(after, t, raceGroupThrough(b2, t, MACHINE, dr, dc)));
   *thDest = dest;
   *thRest = rest;
 }
 
 // A machine line on the board as it is and its T_h (only lines the human can close), small to
-// keep the ESP32 think stack low.
+// keep the ESP32 think stack low. A group unit (RE) has group >= 0: its squares are those with
+// that number in Ctx::groupOf, its ends its empty neighbours.
 struct OpenLine {
   int8_t r, c, dr, dc, len;
+  int8_t group;  // -1 for a line
   float th;
 };
 
@@ -178,16 +189,41 @@ struct Ctx {
   OpenLine open[RACE_MAX_LINES];
   int openCount;
   RaceMask planned;  // ends of the threatened lines on the board as it is
+  const Board* board;  // the board as it is (RaceState::board)
+  int8_t groupOf[MAX_N * MAX_N];  // open group unit of each square, -1 for none
 };
 
-bool onLine(const OpenLine& L, int r, int c) {
+bool onLine(const Ctx& x, const OpenLine& L, int r, int c) {
+  if (L.group >= 0) return x.board->inside(r, c) && x.groupOf[r * x.board->n + c] == L.group;
   for (int k = 0; k < L.len; k++)
     if (L.r + L.dr * k == r && L.c + L.dc * k == c) return true;
   return false;
 }
 
-bool isEnd(const OpenLine& L, int r, int c) {
+bool isEnd(const Ctx& x, const OpenLine& L, int r, int c) {
+  if (L.group >= 0) {
+    const Board& b = *x.board;
+    if (!b.inside(r, c) || b.at(r, c) != EMPTY) return false;
+    for (int d = 0; d < 4; d++) {
+      const int rr = r + DIR_R[d], cc = c + DIR_C[d];
+      if (b.inside(rr, cc) && x.groupOf[rr * b.n + cc] == L.group) return true;
+    }
+    return false;
+  }
   return (r == L.r - L.dr && c == L.c - L.dc) || (r == L.r + L.dr * L.len && c == L.c + L.dc * L.len);
+}
+
+// The squares of an open line or group unit on the board as it is. Returns the count.
+int openSquares(const Ctx& x, const OpenLine& L, uint8_t out[]) {
+  const int n = x.board->n;
+  if (L.group < 0) {
+    for (int k = 0; k < L.len; k++) out[k] = static_cast<uint8_t>((L.r + L.dr * k) * n + (L.c + L.dc * k));
+    return L.len;
+  }
+  int k = 0;
+  for (int sq = 0; sq < n * n; sq++)
+    if (x.groupOf[sq] == L.group) out[k++] = static_cast<uint8_t>(sq);
+  return k;
 }
 
 // One candidate: the moved piece (index into s.pieces, -1 for "stay") and its destination.
@@ -210,8 +246,8 @@ struct MoveInfo {
 
 // When a move starts to count for a line on the board as it is: when the piece takes the line's
 // end, or else when it arrives.
-float takesEffect(const OpenLine& o, const Cand& c, const MoveInfo& mi) {
-  return isEnd(o, c.toR, c.toC) ? mi.reserveAt : mi.arrival;
+float takesEffect(const Ctx& x, const OpenLine& o, const Cand& c, const MoveInfo& mi) {
+  return isEnd(x, o, c.toR, c.toC) ? mi.reserveAt : mi.arrival;
 }
 
 // Whether the drag (fr,fc) -> (tr,tc), starting at `start` and entering one square per
@@ -227,7 +263,7 @@ bool pathOpen(const Ctx& x, const RaceState& st, int fr, int fc, int tr, int tc,
   int i = 0;
   for (int r = fr + dr, c = fc + dc;; r += dr, c += dc, i++) {
     bool end = false;
-    for (int k = 0; k < x.openCount && !end; k++) end = x.open[k].th < RACE_DANGER_MS && isEnd(x.open[k], r, c);
+    for (int k = 0; k < x.openCount && !end; k++) end = x.open[k].th < RACE_DANGER_MS && isEnd(x, x.open[k], r, c);
     if (end) {
       const int sq = r * n + c;
       const float enter = start + static_cast<float>(i) / t.dragSpeed * 1000.0f;
@@ -264,8 +300,8 @@ MoveInfo applyCandidate(const Ctx& x, const RaceState& st, const Cand& c, RaceSt
   mi.reserveAt = mi.start + static_cast<float>(dist - 1) / t.dragSpeed * 1000.0f;
   for (int i = 0; i < x.openCount && safeOthers; i++) {
     const OpenLine& o = x.open[i];
-    if (onLine(o, q.r, q.c)) continue;  // (a) and (b)
-    if (o.th < takesEffect(o, c, mi) + t.margin) safeOthers = false;
+    if (onLine(x, o, q.r, q.c)) continue;  // (a) and (b)
+    if (o.th < takesEffect(x, o, c, mi) + t.margin) safeOthers = false;
   }
   // The piece must also get through: a human piece put on a square of the drag path before the
   // drag enters it stops the piece where it is (with its cooldown), and nothing above holds.
@@ -312,7 +348,7 @@ float capturesLost(const Ctx& x, const RaceState& st, const Cand& c, const MoveI
     float ro = 0.0f;
     for (int i = 0; i < x.openCount; i++) {
       const OpenLine& o = x.open[i];
-      if (!onLine(o, r, cc) || onLine(o, q.r, q.c) || o.th >= mi.arrival + t.margin) continue;
+      if (!onLine(x, o, r, cc) || onLine(x, o, q.r, q.c) || o.th >= mi.arrival + t.margin) continue;
       ro = fmax2(ro, clamp01(0.5f + (mi.arrival + t.margin - o.th) / 2000.0f));
     }
     lost += static_cast<float>(len) * ro;
@@ -346,12 +382,14 @@ float unsafeScore(const Ctx& x, const RaceState& st, const Cand& c, const MoveIn
     const PieceView& q = x.s->pieces[c.piece];
     for (int i = 0; i < x.openCount; i++) {
       const OpenLine& o = x.open[i];
-      if (onLine(o, q.r, q.c)) continue;
-      const float effect = takesEffect(o, c, mi);
+      if (onLine(x, o, q.r, q.c)) continue;
+      const float effect = takesEffect(x, o, c, mi);
       if (o.th >= effect + t.margin) continue;
       const float ro = clamp01(0.5f + (effect + t.margin - o.th) / 2000.0f);
-      for (int k2 = 0; k2 < o.len; k2++) {
-        const int sq = (o.r + o.dr * k2) * n + (o.c + o.dc * k2);
+      uint8_t sqs[MAX_N * MAX_N];
+      const int count = openSquares(x, o, sqs);
+      for (int k2 = 0; k2 < count; k2++) {
+        const int sq = sqs[k2];
         if (st2.board.cells[sq] == MACHINE) riskAt[sq] = fmax2(riskAt[sq], ro);
       }
     }
@@ -398,6 +436,39 @@ __attribute__((noinline)) int threatMoves(const RaceState& st2, const RaceTimes&
         int d[MAX_N * MAX_N];
         const int kd = dests(mb, L.r + L.dr * q, L.c + L.dc * q, d);
         for (int j = 0; j < kd; j++) block.set(d[j]);
+      }
+    }
+    if (t.rules.edgeCapture) {
+      // RE: the edge groups the human can enclose. (i) their empty neighbours, (ii) with none
+      // left, the human pieces next to them (step away and back), (iii) as for the lines.
+      RaceMask seen;
+      seen.clear();
+      for (int sq = 0; sq < n * n; sq++) {
+        if (b.cells[sq] != MACHINE || seen.has(sq)) continue;
+        EdgeGroup g;
+        if (!edgeGroupAt(b, sq / n, sq % n, g)) {
+          seen.set(sq);
+          continue;
+        }
+        for (int w = 0; w < 3; w++) seen.w[w] |= g.cells.w[w];
+        if (g.libCount > RACE_GROUP_MAX_FILL) continue;
+        for (int i = 0; i < g.libCount; i++)
+          if (!st2.blocked[g.libs[i]]) ends.set(g.libs[i]);
+        for (int q = 0; q < n * n; q++) {
+          if (!g.cells.has(q)) continue;
+          for (int d = 0; d < 4; d++) {
+            const int rr = q / n + DIR_R[d], cc = q % n + DIR_C[d];
+            if (g.libCount == 0 && b.inside(rr, cc) && b.at(rr, cc) == HUMAN) onEnd.set(rr * n + cc);
+          }
+        }
+        const float th = raceHumanTime(st2, t, RaceLine{g.first / n, g.first % n, 0, 0, g.size, MACHINE});
+        if (raceInf(th) || th >= RACE_DANGER_MS) continue;
+        for (int q = 0; q < n * n; q++) {
+          if (!g.cells.has(q)) continue;
+          int d[MAX_N * MAX_N];
+          const int kd = dests(mb, q / n, q % n, d);
+          for (int j = 0; j < kd; j++) block.set(d[j]);
+        }
       }
     }
   }
@@ -455,8 +526,10 @@ __attribute__((noinline)) bool forkBroken(const Ctx& x, const RaceState& st, con
       st3.board.set(fr, fc, EMPTY);
     }
     st3.board.set(tr, tc, HUMAN);
+    st3.stale.reset(fr * n + fc);
+    st3.stale.reset(tr * n + tc);
     int caps[MAX_N * MAX_N];
-    if (capturesAt(st3.board, HUMAN, tr, tc, caps) > 0) continue;
+    if (captures(st3.board, t.rules, HUMAN, tr, tc, caps, &st3.stale) > 0) continue;
     h.r = tr;
     h.c = tc;
     h.held = false;
@@ -484,7 +557,8 @@ __attribute__((noinline)) bool forkBroken(const Ctx& x, const RaceState& st, con
   return false;
 }
 
-// Calls f(cand) for "stay" and every legal move of a cooled-down machine piece, in order.
+// Calls f(cand) for "stay" and every legal move of a cooled-down machine piece, in order (RW: not
+// the moves that make a wall).
 template <typename F>
 void forEachCandidate(const Snapshot& s, const RaceState& st, F f) {
   f(Cand{0, -1, -1, -1});
@@ -497,7 +571,10 @@ void forEachCandidate(const Snapshot& s, const RaceState& st, F f) {
     if (!mb.inside(q.r, q.c) || mb.at(q.r, q.c) != MACHINE) continue;
     int d[MAX_N * MAX_N];
     const int k = dests(mb, q.r, q.c, d);
-    for (int j = 0; j < k; j++) f(Cand{index++, i, d[j] / n, d[j] % n});
+    for (int j = 0; j < k; j++) {
+      if (s.wallLimit && completesWall(mb, MACHINE, q.r, q.c, d[j] / n, d[j] % n)) continue;
+      f(Cand{index++, i, d[j] / n, d[j] % n});
+    }
   }
 }
 
@@ -563,14 +640,25 @@ AiMove run(const Snapshot& s, const Params& p, AiDebug* dbg, AiCandidate* list, 
     dbg->forkChecked = 0;
     dbg->forkPenalized = 0;
   }
-  const bool staySafe = allGuarded(ev, k0);
+  // In the opening the machine must make its move: "stay" never contends.
+  const bool staySafe = allGuarded(ev, k0) && !s.mustMove;
   racePlanned(st.board, ev, k0, &x.planned);
+  x.board = &st.board;
+  for (int i = 0; i < MAX_N * MAX_N; i++) x.groupOf[i] = -1;
   x.openCount = 0;
+  int8_t groups = 0;
   for (int i = 0; i < k0; i++)
     if (!raceInf(ev[i].th)) {
       const RaceLine& L = ev[i].line;
+      int8_t group = -1;
+      if (raceIsGroup(L)) {
+        group = groups++;
+        uint8_t sqs[MAX_N * MAX_N];
+        const int count = raceUnitSquares(st.board, L, sqs);
+        for (int q = 0; q < count; q++) x.groupOf[sqs[q]] = group;
+      }
       x.open[x.openCount++] = OpenLine{static_cast<int8_t>(L.r), static_cast<int8_t>(L.c), static_cast<int8_t>(L.dr),
-                                       static_cast<int8_t>(L.dc), static_cast<int8_t>(L.len), ev[i].th};
+                                       static_cast<int8_t>(L.dc), static_cast<int8_t>(L.len), group, ev[i].th};
     }
 
   // Pass 1: safety of every candidate, and the best FORK_TOP + 1 safe ones by score.
@@ -648,6 +736,7 @@ AiMove run(const Snapshot& s, const Params& p, AiDebug* dbg, AiCandidate* list, 
   float bestS = 0.0f;
   uint32_t bestH = 0;
   forEachCandidate(s, st, [&](const Cand& c) {
+    if (c.piece < 0 && s.mustMove) return;
     const MoveInfo mi = applyCandidate(x, st, c, st2);
     const float score = unsafeScore(x, st, c, mi, st2, ev);
     const uint32_t h = candidateHash(x.hash, c.index);

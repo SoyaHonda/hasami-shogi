@@ -875,6 +875,233 @@ void test_mismatch_pause_only_from_play_or_removing() {
   TEST_ASSERT_FALSE(g.mismatch());
 }
 
+// ---- RW: the wall limit and the opening move (plan 2026-11-06 3.1) ----
+
+static Rules withWall() {
+  Rules r;
+  r.wallLimit = true;
+  return r;
+}
+
+// Start an RW game and run the countdown: Opening at caller time 3000 (clock 0).
+static void startOpening(Game& g) {
+  g.start(0);
+  g.tick(3000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)g.phase());
+}
+
+// Drags machine piece `id` square by square to (tr,tc) in a straight line; stops where it
+// cannot enter. Returns the squares it moved.
+static int dragMachine(Game& g, int id, int tr, int tc) {
+  int moved = 0;
+  for (;;) {
+    const PieceView& p = piece(g, id);
+    if (p.r == tr && p.c == tc) return moved;
+    const int nr = p.r + (tr > p.r ? 1 : tr < p.r ? -1 : 0), nc = p.c + (tc > p.c ? 1 : tc < p.c ? -1 : 0);
+    if (!g.machineCanEnter(id, nr, nc)) return moved;
+    g.onMachineStep(id, nr, nc);
+    moved++;
+  }
+}
+
+void test_r0_has_no_opening() {
+  Game g;
+  startPlay(g);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_TRUE(g.openingDone(HUMAN));
+  TEST_ASSERT_TRUE(g.openingDone(MACHINE));
+}
+
+void test_opening_both_sides_move_then_play() {
+  Game g(withWall());
+  startOpening(g);
+  TEST_ASSERT_FALSE(g.openingDone(HUMAN));
+  TEST_ASSERT_FALSE(g.openingDone(MACHINE));
+  TEST_ASSERT_TRUE(g.snapshot(0.0f, 3.0f).mustMove);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 2, 3200));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(4, 2, 3500));
+  TEST_ASSERT_TRUE(g.openingDone(HUMAN));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)g.phase());
+  // The moved piece cools down as usual, on the game clock (from the start of Play).
+  TEST_ASSERT_EQUAL_UINT32(3000, piece(g, hId(2)).cooldownUntil);
+  TEST_ASSERT_EQUAL_INT(2, dragMachine(g, mId(4), 2, 4));
+  g.onMachineArrive(mId(4), 4000);
+  TEST_ASSERT_TRUE(g.openingDone(MACHINE));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_FALSE(g.snapshot(0.0f, 3.0f).mustMove);
+  TEST_ASSERT_EQUAL_UINT32(0, g.clockMs());
+  g.tick(4500);
+  TEST_ASSERT_EQUAL_UINT32(500, g.clockMs());
+}
+
+// Play waits for the side that has not moved; the game clock stays stopped meanwhile.
+void test_opening_waits_for_the_other_side() {
+  Game g(withWall());
+  startOpening(g);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 0, 3000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 0, 3300));
+  g.tick(60000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)g.phase());
+  TEST_ASSERT_EQUAL_UINT32(0, g.clockMs());
+  // The machine first, the human not yet.
+  Game h(withWall());
+  startOpening(h);
+  TEST_ASSERT_EQUAL_INT(3, dragMachine(h, mId(1), 3, 1));
+  h.onMachineArrive(mId(1), 4000);
+  TEST_ASSERT_TRUE(h.openingDone(MACHINE));
+  h.tick(30000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)h.phase());
+  TEST_ASSERT_EQUAL_UINT32(0, h.clockMs());
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)h.onHumanLift(6, 5, 30000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)h.onHumanPlace(5, 5, 30200));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)h.phase());
+}
+
+// One move each: a second lift and a second machine move are refused.
+void test_opening_second_move_refused() {
+  Game g(withWall());
+  startOpening(g);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 1, 3000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 1, 3200));
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::OpeningDone, (int)g.onHumanLift(6, 3, 3400));
+  TEST_ASSERT_TRUE(g.lastViolation().valid);
+  TEST_ASSERT_EQUAL_INT(0, g.heldCount());
+  Game h(withWall());
+  startOpening(h);
+  TEST_ASSERT_EQUAL_INT(1, dragMachine(h, mId(3), 1, 3));
+  h.onMachineArrive(mId(3), 3500);
+  TEST_ASSERT_FALSE(h.machineCanEnter(mId(5), 1, 5));
+  TEST_ASSERT_FALSE(h.machineCanEnter(mId(3), 2, 3));
+}
+
+// Putting the lifted piece back on its square is not the opening move.
+void test_opening_cancel_is_not_a_move() {
+  Game g(withWall());
+  startOpening(g);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 4, 3000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Cancelled, (int)g.onHumanPlace(6, 4, 3200));
+  TEST_ASSERT_FALSE(g.openingDone(HUMAN));
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 4, 3300));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(2, 4, 3500));
+  TEST_ASSERT_TRUE(g.openingDone(HUMAN));
+}
+
+// The hold limit counts in real time during the opening: the piece goes back to its square (a
+// violation) and the opening move is still to be made. No cooldown: on the stopped game clock it
+// would lock the piece for the whole opening (every piece timed out once would stall the game).
+void test_opening_hold_limit_in_real_time() {
+  Game g(withWall());
+  startOpening(g);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 6, 3000));
+  g.tick(3999);
+  TEST_ASSERT_EQUAL_INT(1, g.heldCount());
+  g.tick(4000);
+  TEST_ASSERT_EQUAL_INT(0, g.heldCount());
+  TEST_ASSERT_EQUAL_INT(1, g.holdTimeouts());
+  TEST_ASSERT_TRUE(g.lastViolation().valid);
+  TEST_ASSERT_EQUAL_UINT32(0, piece(g, hId(6)).cooldownUntil);
+  TEST_ASSERT_FALSE(g.openingDone(HUMAN));
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 6, 4100));
+  // Put down too late (judged at the time it was put down): back to its square.
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Illegal, (int)g.onHumanPlace(4, 6, 5300, 5200));
+  TEST_ASSERT_EQUAL_INT(2, g.holdTimeouts());
+  TEST_ASSERT_FALSE(g.openingDone(HUMAN));
+  // Every other piece timed out once too: the opening move can still be made.
+  uint32_t t = 6000;
+  for (int c = 0; c < 6; c++, t += 2000) {
+    TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, c, t));
+    g.tick(t + 1000);
+  }
+  TEST_ASSERT_EQUAL_INT(8, g.holdTimeouts());
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 6, t));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(4, 6, t + 200));
+  TEST_ASSERT_TRUE(g.openingDone(HUMAN));
+}
+
+// A mismatch pause during the opening comes back to the opening; the cooldown it gives counts
+// from the start of Play and does not refuse a lift in the opening.
+void test_opening_mismatch_cooldown_does_not_lock() {
+  Game g(withWall());
+  startOpening(g);
+  const int cells[1] = {6 * 7 + 3};
+  g.pauseForMismatch(cells, 1, 3100);
+  TEST_ASSERT_TRUE(g.mismatch());
+  TEST_ASSERT_EQUAL_UINT32(3000, piece(g, hId(3)).cooldownUntil);
+  g.resumeFromMismatch(3500);
+  g.tick(4500);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)g.phase());
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 3, 4600));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 3, 4800));
+  TEST_ASSERT_TRUE(g.openingDone(HUMAN));
+}
+
+// When the paths cross, the machine stops short of the human piece and that counts as its move;
+// a job that never left its square does not.
+void test_opening_machine_stops_short_and_it_counts() {
+  Game g(withWall());
+  startOpening(g);
+  TEST_ASSERT_EQUAL_INT(2, dragMachine(g, mId(3), 2, 3));  // heading for (5,3)
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 3, 3200));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 3, 3400));
+  TEST_ASSERT_FALSE(g.machineCanEnter(mId(3), 3, 3));
+  g.onMachineArrive(mId(3), 3500);
+  TEST_ASSERT_TRUE(g.openingDone(MACHINE));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_EQUAL_INT(2, piece(g, mId(3)).r);
+  // The human gets in front of the machine piece before it moves at all: no move yet.
+  Game h(withWall());
+  startOpening(h);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)h.onHumanLift(6, 3, 3100));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)h.onHumanPlace(1, 3, 3300));
+  TEST_ASSERT_EQUAL_INT(0, dragMachine(h, mId(3), 4, 3));
+  h.onMachineArrive(mId(3), 3400);
+  TEST_ASSERT_FALSE(h.openingDone(MACHINE));
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)h.phase());
+  TEST_ASSERT_EQUAL_INT(1, dragMachine(h, mId(0), 1, 0));
+  h.onMachineArrive(mId(0), 3600);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)h.phase());
+}
+
+// Pausing during the opening comes back to the opening.
+void test_opening_pause_returns_to_opening() {
+  Game g(withWall());
+  startOpening(g);
+  g.togglePause(3100);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  g.togglePause(5000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Countdown, (int)g.phase());
+  g.tick(6000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)g.phase());
+  TEST_ASSERT_EQUAL_UINT32(0, g.clockMs());
+}
+
+// RW: a placement that fills a row with human pieces from edge to edge is illegal.
+void test_wall_limit_human_wall_is_illegal() {
+  Game g(withWall());
+  startOpening(g);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 2, 3000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(4, 2, 3100));
+  TEST_ASSERT_EQUAL_INT(1, dragMachine(g, mId(6), 1, 6));
+  g.onMachineArrive(mId(6), 3200);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  g.tick(7000);  // the cooldown of (4,2) is over
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(4, 2, 7000));
+  // Back into the gap of row 6: a wall.
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Illegal, (int)g.onHumanPlace(6, 2, 7100));
+  TEST_ASSERT_TRUE(g.lastViolation().valid);
+  TEST_ASSERT_EQUAL_INT(6, g.lastViolation().r);
+  TEST_ASSERT_EQUAL_INT(2, g.lastViolation().c);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 2, 7200));
+  // Without RW the same move is fine.
+  Game r0;
+  startPlay(r0);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)r0.onHumanLift(6, 2, 3000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)r0.onHumanPlace(4, 2, 3100));
+  r0.tick(7000);
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)r0.onHumanLift(4, 2, 7000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)r0.onHumanPlace(6, 2, 7100));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_initial_position);
@@ -917,5 +1144,15 @@ int main(int, char**) {
   RUN_TEST(test_mismatch_cooldown_on_held_piece_put_on_empty_square);
   RUN_TEST(test_mismatch_pause_from_removing_resumes_removing);
   RUN_TEST(test_mismatch_pause_only_from_play_or_removing);
+  RUN_TEST(test_r0_has_no_opening);
+  RUN_TEST(test_opening_both_sides_move_then_play);
+  RUN_TEST(test_opening_waits_for_the_other_side);
+  RUN_TEST(test_opening_second_move_refused);
+  RUN_TEST(test_opening_cancel_is_not_a_move);
+  RUN_TEST(test_opening_hold_limit_in_real_time);
+  RUN_TEST(test_opening_mismatch_cooldown_does_not_lock);
+  RUN_TEST(test_opening_machine_stops_short_and_it_counts);
+  RUN_TEST(test_opening_pause_returns_to_opening);
+  RUN_TEST(test_wall_limit_human_wall_is_illegal);
   return UNITY_END();
 }

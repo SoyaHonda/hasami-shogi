@@ -34,6 +34,8 @@
   color-scheme:dark;
 }
 *{box-sizing:border-box}
+/* The hidden attribute wins over the display of .overlay, .banner and .legend span. */
+[hidden]{display:none !important}
 body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);font-size:14px;line-height:1.6}
 .wrap{max-width:1140px;margin:0 auto;padding-block:20px 40px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr);gap:28px;align-items:start}
 header{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px}
@@ -59,6 +61,8 @@ h1{margin:0;font-family:var(--font-koma);font-weight:800;font-size:clamp(24px,4v
 .cell[data-led="purple"]{box-shadow:inset 0 0 0 3px var(--cyan)}
 .cell[data-led="white"]{box-shadow:inset 0 0 0 2px var(--white-led)}
 .cell.origin{box-shadow:inset 0 0 0 2px var(--ink);}
+/* 端の取り（RE）のヒント：LedPlan の暗い黄色。 */
+.cell[data-led="hint"]::after{content:"";position:absolute;inset:14%;border-radius:50%;border:2px dashed var(--red);opacity:.9}
 @keyframes pulse{from{opacity:.45}to{opacity:.95}}
 
 .layer{position:absolute;inset:0;pointer-events:none}
@@ -83,6 +87,10 @@ h1{margin:0;font-family:var(--font-koma);font-weight:800;font-size:clamp(24px,4v
 .board.dragging{cursor:grabbing}
 .koma.gone{transition:opacity .5s,transform .5s;opacity:0}
 
+.banner{position:absolute;left:50%;top:8px;transform:translateX(-50%);z-index:4;pointer-events:none;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 12px;display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;justify-content:center;box-shadow:0 6px 16px -10px rgba(0,0,0,.4);max-width:calc(100% - 16px)}
+.banner b{font-family:var(--font-koma);font-weight:800;font-size:16px}
+.banner span{font-size:12.5px;color:var(--muted)}
+.banner span.done{color:var(--ok);font-weight:700}
 .overlay{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 70%,transparent);backdrop-filter:blur(2px);text-align:center;padding:16px}
 .overlay .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px 22px;max-width:340px;display:grid;gap:10px;justify-items:center}
 .overlay .big{font-family:var(--font-koma);font-weight:800;font-size:clamp(28px,6vw,48px);line-height:1.1}

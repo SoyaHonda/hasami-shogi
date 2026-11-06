@@ -18,7 +18,19 @@ constexpr int DIR_C[4] = {0, 0, 1, -1};
 // in the order down, up, right, left. Returns the count.
 int dests(const Board& b, int r, int c, int out[]);
 
-// Pieces captured by `side` having just arrived at (r,c), as indices r*n+c. In each direction
-// a run of enemy pieces is captured only when followed by one of side's own pieces; a run that
-// reaches the edge of the board is not captured. Returns the count.
+// Squares as a bit set (MAX_N*MAX_N <= 96 bits).
+struct SquareSet {
+  uint32_t w[3];
+  void clear() { w[0] = w[1] = w[2] = 0; }
+  void set(int i) { w[i >> 5] |= 1u << (i & 31); }
+  void reset(int i) { w[i >> 5] &= ~(1u << (i & 31)); }
+  bool has(int i) const { return (w[i >> 5] >> (i & 31)) & 1u; }
+  bool any() const { return (w[0] | w[1] | w[2]) != 0; }
+};
+
+// The custodian capture of R0 alone: pieces captured by `side` having just arrived at (r,c), as
+// indices r*n+c. In each direction a run of enemy pieces is captured only when followed by one
+// of side's own pieces; a run that reaches the edge of the board is not captured. Returns the
+// count. The same as captures() of Capture.h with the default Rules (implemented there); the
+// game and every reader call captures() with the rules in force.
 int capturesAt(const Board& b, int8_t side, int r, int c, int out[]);

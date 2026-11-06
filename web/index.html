@@ -23,6 +23,7 @@
       <div class="board" id="board" role="grid" aria-label="盤">
         <div class="cells" id="cells"></div>
         <div class="layer" id="layer"></div>
+        <div class="banner" id="banner" hidden></div>
         <div class="overlay" id="overlay" hidden></div>
       </div>
       <div class="ranks" id="ranks"></div>
@@ -35,6 +36,7 @@
       <span><i class="dot" style="border:2px solid var(--white-led)"></i>取られて運び出しを待つ駒</span>
       <span><i class="dot" style="border:2px dashed var(--cyan)"></i>盤の下の電磁石ヘッド</span>
       <span><i class="dot" style="background:var(--blue)"></i>置けるマス</span>
+      <span id="legendEdge" hidden><i class="dot" style="border:2px dashed var(--red)"></i>端の取り：あと1マス埋めると囲みが完成するマス</span>
     </div>
   </div>
 
@@ -89,6 +91,18 @@
         <input type="range" id="hHold" min="0.5" max="5" step="0.5" value="1">
         <span class="hint">これを過ぎても置かないと、駒は元のマスに戻ってクールダウンが付きます。持ち上げられるのは1枚だけです。</span>
       </div>
+      <h2>追加のルール（次の対局から）</h2>
+      <label class="check"><input type="checkbox" id="ruleEdge">端の取り（公式）：盤端につながったまとまりは、空きマスなく囲むと取れる</label>
+      <label class="check"><input type="checkbox" id="ruleWall">壁の制限と最初の一手：段を端から端まで埋める手は反則。開始時に両者が1手ずつ指してから時計が動く</label>
+      <div class="inline">
+        <span>長く動かしていない駒</span>
+        <div class="seg" role="group" aria-label="長く動かしていない駒の取り（予備）">
+          <button id="ruOff" aria-pressed="true">なし</button>
+          <button id="ru20" aria-pressed="false">20秒</button>
+          <button id="ru40" aria-pressed="false">40秒</button>
+        </div>
+      </div>
+      <span class="hint" style="font-size:12px;color:var(--muted);line-height:1.5">予備のルールです。別のマスへ置いてからこの時間がたった駒は、相手の駒1枚に縦横で隣に来られただけで取られます（元のマスに戻しても時計は戻りません）。</span>
     </section>
 
     <section class="box" aria-label="機械の設定">
@@ -139,7 +153,9 @@
       <ul class="rules">
         <li>自分の歩をつかんで行き先までドラッグして離すと置けます。盤の外や置けないマスで離すと元に戻ります。クリックで持ち上げて行き先をクリックしても動かせます（元のマスをクリックかEscキーで取り消し）。</li>
         <li>駒は縦横にまっすぐ何マスでも進めます。駒は飛び越えられません。</li>
-        <li>相手の駒を縦か横に自分の駒ではさむと取れます。自分から敵の間に入った駒は取られません。隅の囲み取りはなしです。</li>
+        <li>相手の駒を縦か横に自分の駒ではさむと取れます。自分から敵の間に入った駒は取られません。隅の囲み取りは、「端の取り」をオンにしたときだけです。</li>
+        <li>「端の取り」をオンにすると、盤端につながった相手のまとまりの隣のマスをすべて自分の駒で埋めたとき（盤端は埋めたものとみなします）、まとめて取れます。1マスでもすき間があれば取れません。あと1マスのところは盤上に点線で示します。</li>
+        <li>「壁の制限」をオンにすると、ある段を自分の駒で端から端まで埋める手は置けません。対局は「最初の一手」から始まり、あなたと機械がそれぞれ駒を1つ動かすと時計が動き出します（元のマスに戻すのは1手に数えません）。</li>
         <li>動かした駒はクールダウンが終わるまで動かせません。持ち上げている間の駒は盤上にないので、はさまれません。</li>
         <li>持ち上げられるのは1枚だけです。別の駒を動かすには、持っている駒を置くか元のマスに戻してください。</li>
         <li>置いてから次に置くまでには「置く間隔」（既定1秒）が必要です。早く置いた駒は半透明で表示され、間隔が過ぎた時点で置いたことになります。</li>

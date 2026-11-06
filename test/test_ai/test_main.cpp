@@ -587,6 +587,130 @@ void test_golden_cases() {
   TEST_ASSERT_EQUAL_INT(0, failures);
 }
 
+// ---- Rule candidates (plan 2026-11-06 3.1) ----
+
+// RW: the read never picks a move that fills a row edge to edge.
+void test_wall_limit_move_is_no_candidate() {
+  Snapshot s = makeSnap(
+      "MMM.MMM\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "H.....H",
+      2.0f, 3.0f);
+  for (int wall = 0; wall < 2; wall++) {
+    s.wallLimit = wall == 1;
+    static AiCandidate cand[AI_MAX_CANDIDATES];
+    const int k = thinkCandidates(s, Params(), cand, AI_MAX_CANDIDATES);
+    bool intoGap = false, alongRow = false;
+    for (int i = 0; i < k; i++) {
+      if (cand[i].none) continue;
+      const PieceView& p = pieceById(s, cand[i].pieceId);
+      if (p.r == 2 && p.c == 3 && cand[i].toR == 0 && cand[i].toC == 3) intoGap = true;
+      if (p.r == 0 && p.c == 2 && cand[i].toR == 0 && cand[i].toC == 3) alongRow = true;
+    }
+    TEST_ASSERT_EQUAL_INT(wall == 0, (int)intoGap);
+    TEST_ASSERT_TRUE(alongRow);  // sliding along the row leaves a gap behind
+    const AiMove m = think(s, Params());
+    if (wall == 1 && !m.none) {
+      const PieceView& p = pieceById(s, m.pieceId);
+      TEST_ASSERT_FALSE(p.r == 2 && p.c == 3 && m.toR == 0 && m.toC == 3);
+    }
+  }
+}
+
+// Opening (mustMove): "stay" is no candidate; the read makes one move.
+void test_opening_read_makes_a_move() {
+  Rules rules;
+  rules.wallLimit = true;
+  Game g(rules);
+  g.start(0);
+  g.tick(3000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Opening, (int)g.phase());
+  const Snapshot s = g.snapshot(0.0f, 3.0f);
+  TEST_ASSERT_TRUE(s.mustMove);
+  TEST_ASSERT_TRUE(s.wallLimit);
+  for (int level = 0; level < 3; level++) {
+    Params p;
+    p.level = static_cast<Level>(level);
+    const AiMove m = think(s, p);
+    TEST_ASSERT_FALSE(m.none);
+    static AiCandidate cand[AI_MAX_CANDIDATES];
+    const int k = thinkCandidates(s, p, cand, AI_MAX_CANDIDATES);
+    TEST_ASSERT_TRUE(k > 1);
+    TEST_ASSERT_TRUE(cand[0].none);
+    TEST_ASSERT_FALSE(cand[0].contending);
+  }
+}
+
+// RE: the read counts the edge capture its move makes.
+void test_re_read_takes_an_enclosed_corner() {
+  Snapshot s = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "M......\n"
+      "H...M..",
+      6.0f, 3.0f);
+  s.edgeCapture = true;
+  AiMove m = think(s, Params());
+  TEST_ASSERT_FALSE(m.none);
+  TEST_ASSERT_EQUAL_INT(6, pieceById(s, m.pieceId).r);
+  TEST_ASSERT_EQUAL_INT(4, pieceById(s, m.pieceId).c);
+  TEST_ASSERT_EQUAL_INT(6, m.toR);
+  TEST_ASSERT_EQUAL_INT(1, m.toC);
+  TEST_ASSERT_TRUE(m.score > 50.0f);
+}
+
+// The golden table's rules field (lib/core/AiCase.h).
+void test_ai_case_rules_field() {
+  AiCase c;
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 RE+RW+OPEN none", c));
+  TEST_ASSERT_TRUE(c.snap.edgeCapture);
+  TEST_ASSERT_TRUE(c.snap.wallLimit);
+  TEST_ASSERT_TRUE(c.snap.mustMove);
+  TEST_ASSERT_EQUAL_UINT32(0, c.snap.untouchedMs);
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 RU20000 none", c));
+  TEST_ASSERT_FALSE(c.snap.edgeCapture);
+  TEST_ASSERT_EQUAL_UINT32(20000, c.snap.untouchedMs);
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 - none", c));
+  TEST_ASSERT_FALSE(c.snap.edgeCapture || c.snap.wallLimit || c.snap.mustMove);
+  TEST_ASSERT_TRUE(parseAiCase("M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 none", c));  // 8 fields: R0
+  TEST_ASSERT_FALSE(c.snap.edgeCapture);
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 RX none", c));
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 RE+ none", c));
+  TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - 3,1.5,100,250,H,0.25,0 RE none", c));  // rules need gap/lift
+}
+
+// think() time under RE + RW (plan 2026-11-06 3.2): the same budgets as R0's on the PC.
+void test_think_time_with_rules() {
+  double total = 0.0;
+  int count = 0;
+  FILE* f = openGolden();
+  TEST_ASSERT_NOT_NULL(f);
+  char line[512];
+  while (std::fgets(line, sizeof(line), f)) {
+    AiCase c;
+    if (isAiCaseSkippable(line) || !parseAiCase(line, c)) continue;
+    c.snap.edgeCapture = true;
+    c.snap.wallLimit = true;
+    total += thinkMicros(c.snap, c.params);
+    count++;
+  }
+  std::fclose(f);
+  AiCase worst;
+  TEST_ASSERT_TRUE(parseAiCase(
+      "HMM....M.......H.M.H...H......H...HM...MM..H..... - 0,0 - - - 4,1.5,200,250,H,0.5,1 RE+RW none", worst));
+  const double worstUs = thinkMicros(worst.snap, worst.params);
+  printf("think RE+RW: mean %.0f us over %d positions, worst position %.0f us\n", total / count, count, worstUs);
+  TEST_ASSERT_TRUE(total / count <= 2000.0);
+  TEST_ASSERT_TRUE(worstUs <= 10000.0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_picks_capture);
@@ -604,5 +728,10 @@ int main(int, char**) {
   RUN_TEST(test_ai_case_parser);
   RUN_TEST(test_snapshot_fields);
   RUN_TEST(test_golden_cases);
+  RUN_TEST(test_wall_limit_move_is_no_candidate);
+  RUN_TEST(test_opening_read_makes_a_move);
+  RUN_TEST(test_re_read_takes_an_enclosed_corner);
+  RUN_TEST(test_ai_case_rules_field);
+  RUN_TEST(test_think_time_with_rules);
   return UNITY_END();
 }

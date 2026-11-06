@@ -32,11 +32,15 @@ class MachineController {
   // reactMs after the latest lift, whichever is earlier. False outside Play, during a job and
   // while a result is awaited. Exception: once during the countdown after a board-mismatch
   // pause (Game::mismatchCountdown), so the move is ready when Play resumes (plan 2026-10-31 3.2).
+  // In Opening (RW, plan 2026-11-06 3.1) until the machine's opening move is made, every
+  // max(150, reactMs) of the caller's clock (the game clock is stopped there), the first that
+  // long after Opening began.
   bool wantsThink(uint32_t now) const;
   // Records the read time and the awaiting-result mark, and returns the snapshot to think on.
   Snapshot takeSnapshot(uint32_t now);
   // Clears the awaiting mark. Starts the job only when the piece is alive and cooled down and
-  // the destination is still legal on the current board; otherwise the result is dropped.
+  // the destination is still legal on the current board (RW: no wall); otherwise the result is
+  // dropped. In Opening only while the machine's opening move is still to be made.
   // A result for the read made during a mismatch countdown is kept and started (with the same
   // checks) by the first update() in Play; it is dropped if the game leaves the countdown
   // other than into Play.
@@ -65,6 +69,7 @@ class MachineController {
   bool countdownRead_;  // the mismatch countdown's read was taken
   bool hasDeferred_;    // deferred_ waits for Play
   AiMove deferred_;
+  uint32_t openingReadAt_;  // caller time Opening began or of the latest read in it
 
   bool active_;
   bool removing_;

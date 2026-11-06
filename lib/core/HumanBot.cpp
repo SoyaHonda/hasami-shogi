@@ -17,6 +17,25 @@ uint32_t cooldownLeft(const PieceView& p, uint32_t clock) {
 
 bool humanOnBoard(const PieceView& p) { return p.alive && !p.held && p.side == HUMAN; }
 
+// The game's capture rules and its untouched pieces (RU), for capturesBy.
+struct CapRules {
+  const Rules* rules;
+  SquareSet stale;
+};
+
+CapRules capRules(const Game& g) { return CapRules{&g.rules(), g.stale()}; }
+
+// Destinations of the human piece on (r,c) on b that are legal under the game's rules (RW: not
+// the ones that make a wall), in dests() order.
+int legalDests(const Game& g, const Board& b, int r, int c, int out[]) {
+  int d[MAX_N * MAX_N];
+  const int k = dests(b, r, c, d);
+  int m = 0;
+  for (int j = 0; j < k; j++)
+    if (!makesWall(b, g.rules(), HUMAN, r, c, d[j] / b.n, d[j] % b.n)) out[m++] = d[j];
+  return m;
+}
+
 // Whether the piece at (r,c) reaches the empty square (tr,tc) in one move on b.
 bool reaches(const Board& b, int r, int c, int tr, int tc) {
   if (!b.inside(tr, tc) || (r == tr) == (c == tc) || b.at(tr, tc) != EMPTY) return false;
@@ -27,11 +46,11 @@ bool reaches(const Board& b, int r, int c, int tr, int tc) {
 }
 
 // Machine pieces the human captures by moving (fr,fc) (-1: a held piece) to (tr,tc) on cb.
-int capturesBy(Board cb, int fr, int fc, int tr, int tc) {
+int capturesBy(const CapRules& cr, Board cb, int fr, int fc, int tr, int tc) {
   if (fr >= 0) cb.set(fr, fc, EMPTY);
   cb.set(tr, tc, HUMAN);
   int caps[MAX_N * MAX_N];
-  return capturesAt(cb, HUMAN, tr, tc, caps);
+  return captures(cb, *cr.rules, HUMAN, tr, tc, caps, &cr.stale);
 }
 
 // Moves of the cooled-down human pieces on b (the board with the reserved square).
@@ -42,7 +61,7 @@ int readyMoves(const Game& g, const Board& b, Move out[]) {
     const PieceView& p = g.pieces()[i];
     if (!humanOnBoard(p) || cooldownLeft(p, clock) > 0) continue;
     int d[MAX_N * MAX_N];
-    const int nd = dests(b, p.r, p.c, d);
+    const int nd = legalDests(g, b, p.r, p.c, d);
     for (int j = 0; j < nd && k < MAX_MOVES; j++) out[k++] = Move{p.id, p.r, p.c, d[j] / b.n, d[j] % b.n};
   }
   return k;
@@ -60,8 +79,9 @@ bool lineHas(const RaceLine& L, int r, int c) {
 }
 
 // End squares of the machine lines on cb whose both ends are on the board (the squares a
-// capture lands on). Returns the count.
-int lineEnds(const Board& cb, int out[]) {
+// capture lands on), then (RE) the empty neighbours of the machine's edge groups with at most
+// RACE_GROUP_MAX_FILL of them. Returns the count.
+int lineEnds(const Board& cb, const Rules& rules, int out[]) {
   RaceLine lines[RACE_MAX_LINES];
   const int nl = raceLines(cb, MACHINE, lines);
   bool seen[MAX_N * MAX_N] = {};
@@ -74,12 +94,29 @@ int lineEnds(const Board& cb, int out[]) {
     if (!seen[a]) out[k++] = a, seen[a] = true;
     if (!seen[e]) out[k++] = e, seen[e] = true;
   }
+  if (rules.edgeCapture) {
+    const int n = cb.n;
+    SquareSet done;
+    done.clear();
+    for (int sq = 0; sq < n * n; sq++) {
+      if (cb.cells[sq] != MACHINE || done.has(sq)) continue;
+      EdgeGroup g;
+      if (!edgeGroupAt(cb, sq / n, sq % n, g)) {
+        done.set(sq);
+        continue;
+      }
+      for (int w = 0; w < 3; w++) done.w[w] |= g.cells.w[w];
+      if (g.libCount > RACE_GROUP_MAX_FILL) continue;
+      for (int i = 0; i < g.libCount; i++)
+        if (!seen[g.libs[i]]) out[k++] = g.libs[i], seen[g.libs[i]] = true;
+    }
+  }
   return k;
 }
 
 // Whether one more human move on (b, cb) captures: some human piece reaches an end square and
 // closes the line there. Cooldowns are not looked at (the move comes later).
-bool captureNext(const Board& b, const Board& cb, const int ends[], int ne) {
+bool captureNext(const CapRules& cr, const Board& b, const Board& cb, const int ends[], int ne) {
   const int n = b.n;
   for (int e = 0; e < ne; e++) {
     const int tr = ends[e] / n, tc = ends[e] % n;
@@ -87,23 +124,24 @@ bool captureNext(const Board& b, const Board& cb, const int ends[], int ne) {
     for (int r = 0; r < n; r++)
       for (int c = 0; c < n; c++) {
         if (b.at(r, c) != HUMAN || !reaches(b, r, c, tr, tc)) continue;
-        if (capturesBy(cb, r, c, tr, tc) > 0) return true;
+        if (makesWall(b, *cr.rules, HUMAN, r, c, tr, tc)) continue;
+        if (capturesBy(cr, cb, r, c, tr, tc) > 0) return true;
       }
   }
   return false;
 }
 
 // Whether a human piece still in cooldown has a capturing move on (b, cb).
-bool captureAfterCooldown(const Game& g, const Board& b, const Board& cb) {
+bool captureAfterCooldown(const Game& g, const CapRules& cr, const Board& b, const Board& cb) {
   const uint32_t clock = g.clockMs();
   for (int i = 0; i < g.pieceCount(); i++) {
     const PieceView& p = g.pieces()[i];
     const uint32_t cd = cooldownLeft(p, clock);
     if (!humanOnBoard(p) || cd == 0 || cd > g.rules().humanCooldownMs) continue;
     int d[MAX_N * MAX_N];
-    const int nd = dests(b, p.r, p.c, d);
+    const int nd = legalDests(g, b, p.r, p.c, d);
     for (int j = 0; j < nd; j++)
-      if (capturesBy(cb, p.r, p.c, d[j] / b.n, d[j] % b.n) > 0) return true;
+      if (capturesBy(cr, cb, p.r, p.c, d[j] / b.n, d[j] % b.n) > 0) return true;
   }
   return false;
 }
@@ -144,6 +182,9 @@ void HumanBot::reset() {
   armed_ = false;
   nextAt_ = 0;
   failures_ = 0;
+  now_ = 0;
+  openArmed_ = false;
+  openNextAt_ = 0;
 }
 
 uint32_t HumanBot::moveTime(const Game& game) {
@@ -173,11 +214,13 @@ BotRaceEval HumanBot::raceAfter(const Game& game, float headR, float headC, int 
   p.r = toR;
   p.c = toC;
   p.cooldownUntil = s.clockMs + s.humanCooldownMs;
+  p.movedAt = s.clockMs;
   s.board.set(toR, toC, HUMAN);
   s.hasLastPlace = true;
   s.lastPlaceAt = s.clockMs;
   int caps[MAX_N * MAX_N];
-  const int nc = capturesAt(s.board, HUMAN, toR, toC, caps);
+  const SquareSet stale = game.stale();
+  const int nc = captures(s.board, game.rules(), HUMAN, toR, toC, caps, &stale);
   for (int i = 0; i < nc; i++) {
     for (int j = 0; j < s.count; j++) {
       PieceView& q = s.pieces[j];
@@ -233,6 +276,7 @@ BotMove HumanBot::chooseTrap(const Game& game) {
   const BotMove none{BotMove::None, -1, -1, -1};
   const Board b = game.boardWithReserve();
   const Board cb = game.boardWithoutHeld();
+  const CapRules cr = capRules(game);
   const uint32_t clock = game.clockMs();
   const Rules& rules = game.rules();
   const PieceView* pieces = game.pieces();
@@ -249,14 +293,14 @@ BotMove HumanBot::chooseTrap(const Game& game) {
   // 1. A capture now (the most pieces).
   int best = 0;
   for (int i = 0; i < k; i++) {
-    const int c = capturesBy(cb, mv[i].fr, mv[i].fc, mv[i].tr, mv[i].tc);
+    const int c = capturesBy(cr, cb, mv[i].fr, mv[i].fc, mv[i].tr, mv[i].tc);
     if (c > best) best = c, nc = 0;
     if (c > 0 && c == best) cand[nc++] = i;
   }
   if (nc > 0) return pick();
 
   // 2. A piece still in cooldown will capture (trap B's return): wait for it.
-  if (captureAfterCooldown(game, b, cb)) return BotMove{BotMove::Wait, -1, -1, -1};
+  if (captureAfterCooldown(game, cr, b, cb)) return BotMove{BotMove::Wait, -1, -1, -1};
 
   RaceLine lines[RACE_MAX_LINES];
   const int nl = raceLines(cb, MACHINE, lines);
@@ -349,6 +393,7 @@ BotMove HumanBot::chooseRace(const Game& game, float headR, float headC, bool se
   const BotMove none{BotMove::None, -1, -1, -1};
   const Board b = game.boardWithReserve();
   const Board cb = game.boardWithoutHeld();
+  const CapRules cr = capRules(game);
   Move mv[MAX_MOVES];
   const int k = readyMoves(game, b, mv);
   if (k == 0) return none;
@@ -358,7 +403,7 @@ BotMove HumanBot::chooseRace(const Game& game, float headR, float headC, bool se
   // A capture now (the most pieces).
   int best = 0;
   for (int i = 0; i < k; i++) {
-    const int c = capturesBy(cb, mv[i].fr, mv[i].fc, mv[i].tr, mv[i].tc);
+    const int c = capturesBy(cr, cb, mv[i].fr, mv[i].fc, mv[i].tr, mv[i].tc);
     if (c > best) best = c, nc = 0;
     if (c > 0 && c == best) cand[nc++] = i;
   }
@@ -367,18 +412,18 @@ BotMove HumanBot::chooseRace(const Game& game, float headR, float headC, bool se
     return BotMove{BotMove::Move, m.id, m.tr, m.tc};
   }
 
-  if (search && captureAfterCooldown(game, b, cb)) return BotMove{BotMove::Wait, -1, -1, -1};
+  if (search && captureAfterCooldown(game, cr, b, cb)) return BotMove{BotMove::Wait, -1, -1, -1};
   if (search) {
     // Race3: the first moves of the shortest capture with two or three placements while the
     // machine stands still (one piece moving more than once, or several pieces in turn).
     int ends[MAX_N * MAX_N];
-    const int ne = lineEnds(cb, ends);
+    const int ne = lineEnds(cb, game.rules(), ends);
     if (ne > 0) {
       for (int i = 0; i < k; i++) {
         Board b1 = b, c1 = cb;
         apply(b1, mv[i].fr, mv[i].fc, mv[i].tr, mv[i].tc);
         apply(c1, mv[i].fr, mv[i].fc, mv[i].tr, mv[i].tc);
-        if (captureNext(b1, c1, ends, ne)) cand[nc++] = i;
+        if (captureNext(cr, b1, c1, ends, ne)) cand[nc++] = i;
       }
       if (nc == 0) {
         const int n = b.n;
@@ -390,12 +435,12 @@ BotMove HumanBot::chooseRace(const Game& game, float headR, float headC, bool se
           for (int sq = 0; sq < n * n && !found; sq++) {
             if (b1.cells[sq] != HUMAN) continue;
             int d[MAX_N * MAX_N];
-            const int nd = dests(b1, sq / n, sq % n, d);
+            const int nd = legalDests(game, b1, sq / n, sq % n, d);
             for (int j = 0; j < nd && !found; j++) {
               Board b2 = b1, c2 = c1;
               apply(b2, sq / n, sq % n, d[j] / n, d[j] % n);
               apply(c2, sq / n, sq % n, d[j] / n, d[j] % n);
-              found = captureNext(b2, c2, ends, ne);
+              found = captureNext(cr, b2, c2, ends, ne);
             }
           }
           if (found) cand[nc++] = i;
@@ -437,8 +482,10 @@ BotMove HumanBot::chooseRace(const Game& game, float headR, float headC, bool se
   return BotMove{BotMove::Move, m.id, m.tr, m.tc};
 }
 
-BotAction HumanBot::decide(const Game& game, float headR, float headC) {
+BotAction HumanBot::decide(const Game& game, float headR, float headC, uint32_t now) {
   const BotAction none{BotAction::None, -1, -1};
+  now_ = now;
+  if (game.phase() == Phase::Opening) return decideOpening(game, headR, headC, now);
   if (game.phase() != Phase::Play) return none;
   const uint32_t clock = game.clockMs();
   if (holding_) {
@@ -465,18 +512,23 @@ BotAction HumanBot::decide(const Game& game, float headR, float headC) {
   if (holding_) return putDown(game, headR, headC);
 
   const BotMove m = choose(game, headR, headC);
+  if (m.kind != BotMove::Move && m.kind != BotMove::Random) {
+    nextAt_ = clock + 100;  // look again shortly
+    return none;
+  }
+  return liftFor(game, m);
+}
+
+BotAction HumanBot::liftFor(const Game& game, const BotMove& m) {
   if (m.kind == BotMove::Move) {
     planR_ = m.toR;
     planC_ = m.toC;
     const PieceView& p = game.pieces()[m.id - 1];
     return BotAction{BotAction::Lift, p.r, p.c};
   }
-  if (m.kind != BotMove::Random) {
-    nextAt_ = clock + 100;  // look again shortly
-    return none;
-  }
   // Random: a movable piece (cooled down with at least one legal destination).
   planR_ = planC_ = -1;
+  const uint32_t clock = game.clockMs();
   const Board b = game.boardWithReserve();
   const PieceView* pieces = game.pieces();
   int ids[2 * MAX_N];
@@ -485,12 +537,41 @@ BotAction HumanBot::decide(const Game& game, float headR, float headC) {
     const PieceView& p = pieces[i];
     if (!humanOnBoard(p) || clock < p.cooldownUntil) continue;
     int d[MAX_N * MAX_N];
-    if (dests(b, p.r, p.c, d) == 0) continue;
+    if (legalDests(game, b, p.r, p.c, d) == 0) continue;
     ids[k++] = p.id;
   }
-  if (k == 0) return none;
+  if (k == 0) return BotAction{BotAction::None, -1, -1};
   const PieceView& p = pieces[ids[rng_.below(k)] - 1];
   return BotAction{BotAction::Lift, p.r, p.c};
+}
+
+BotAction HumanBot::decideOpening(const Game& game, float headR, float headC, uint32_t now) {
+  const BotAction none{BotAction::None, -1, -1};
+  if (holding_) {
+    bool stillHeld = false;
+    for (int i = 0; i < game.heldCount(); i++)
+      if (game.heldIds()[i] == heldId_) stillHeld = true;
+    if (!stillHeld) {
+      // The hold limit put it back: choose again shortly.
+      holding_ = false;
+      openNextAt_ = now + params_.reactMs;
+      return none;
+    }
+    if (static_cast<int32_t>(now - openNextAt_) < 0) return none;
+    return putDown(game, headR, headC);
+  }
+  if (game.openingDone(HUMAN) || game.heldCount() > 0) return none;
+  if (!openArmed_) {
+    openArmed_ = true;
+    openNextAt_ = now + params_.reactMs;
+  }
+  if (static_cast<int32_t>(now - openNextAt_) < 0) return none;
+  const BotMove m = choose(game, headR, headC);
+  if (m.kind != BotMove::Move && m.kind != BotMove::Random) {
+    openNextAt_ = now + 100;
+    return none;
+  }
+  return liftFor(game, m);
 }
 
 BotAction HumanBot::putDown(const Game& game, float headR, float headC) {
@@ -499,24 +580,25 @@ BotAction HumanBot::putDown(const Game& game, float headR, float headC) {
   const int n = b.n;
   const PieceView& p = game.pieces()[heldId_ - 1];
   int d[MAX_N * MAX_N];
-  const int k = dests(b, p.r, p.c, d);
+  const int k = legalDests(game, b, p.r, p.c, d);
   if (k == 0) {
     // Put it back when the origin is free; otherwise any empty square (escape rule).
     if (b.at(p.r, p.c) == EMPTY) return BotAction{BotAction::Place, p.r, p.c};
     int empty[MAX_N * MAX_N];
     int ne = 0;
     for (int i = 0; i < n * n; i++)
-      if (b.cells[i] == EMPTY) empty[ne++] = i;
+      if (b.cells[i] == EMPTY && !makesWall(b, game.rules(), HUMAN, p.r, p.c, i / n, i % n)) empty[ne++] = i;
     if (ne == 0) return none;
     const int e = empty[rng_.below(ne)];
     return BotAction{BotAction::Place, e / n, e % n};
   }
   // Capture check on the real board (the reserved square is not a machine piece yet).
   const Board bb = game.boardWithoutHeld();
+  const CapRules cr = capRules(game);
   int capt[MAX_N * MAX_N];
   int nc = 0, best = 0;
   for (int i = 0; i < k; i++) {
-    const int c = capturesBy(bb, -1, -1, d[i] / n, d[i] % n);
+    const int c = capturesBy(cr, bb, -1, -1, d[i] / n, d[i] % n);
     if (params_.style != BotStyle::Random && c > best) best = c, nc = 0;
     if (c > 0 && (params_.style == BotStyle::Random || c == best)) capt[nc++] = d[i];
   }
@@ -557,7 +639,9 @@ void HumanBot::onLifted(const Game& game, bool ok, int r, int c) {
   heldId_ = game.heldIds()[game.heldCount() - 1];
   holding_ = true;
   failures_ = 0;
-  nextAt_ = game.clockMs() + moveTime(game);
+  const uint32_t hold = moveTime(game);
+  nextAt_ = game.clockMs() + hold;
+  openNextAt_ = now_ + hold;
 }
 
 void HumanBot::onPlaced(const Game& game, PlaceResult res) {
@@ -572,4 +656,5 @@ void HumanBot::onPlaced(const Game& game, PlaceResult res) {
   failures_ = 0;
   armed_ = true;
   nextAt_ = game.clockMs() + params_.reactMs;
+  openNextAt_ = now_ + params_.reactMs;
 }

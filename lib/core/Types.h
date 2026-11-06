@@ -2,7 +2,9 @@
 #include <cstdint>
 
 enum Cell : int8_t { EMPTY = 0, HUMAN = 1, MACHINE = 2 };
-enum class Phase { Ready, Countdown, Play, Paused, Removing, Over };
+// Opening (RW, plan 2026-11-06 3.1): after the start countdown, each side makes one move before
+// Play; the game clock stays stopped. Appended so the other values keep their numbers.
+enum class Phase { Ready, Countdown, Play, Paused, Removing, Over, Opening };
 // Draw: the time limit ran out with equal captures.
 enum class Winner { None, Human, Machine, Draw };
 enum class Level { Easy, Normal, Hard };

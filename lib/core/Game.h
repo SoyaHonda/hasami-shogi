@@ -2,10 +2,12 @@
 #include <cstdint>
 #include "Ai.h"
 #include "Board.h"
+#include "Capture.h"
 #include "Rules.h"
 #include "Types.h"
 
-enum class LiftResult { Ok, InCooldown, NotHumanPiece, NotPlaying, TooMany };
+// OpeningDone: during Phase::Opening the human has made the opening move already (RW).
+enum class LiftResult { Ok, InCooldown, NotHumanPiece, NotPlaying, TooMany, OpeningDone };
 // Pending: the placement came less than Rules::humanIntervalMs after the previous one; the piece
 // stays held and lands when the interval has passed (see onHumanPlace).
 enum class PlaceResult { Ok, Cancelled, Illegal, NoHeldPiece, NotPlaying, Pending };
@@ -35,6 +37,16 @@ struct Violation {
 
 // Game state machine. Times passed in (`now`) are the caller's clock in ms; the game clock
 // advances only during Play and cooldowns are measured on it.
+//
+// Rule candidates (plan 2026-11-06 3.1, Rules): captures are judged by captures() of Capture.h
+// (RE, RU); under RW a placement that makes a wall is Illegal, and the start countdown leads to
+// Phase::Opening. There each side moves one piece to another square (a cancel does not count; a
+// machine piece stopped short by a human piece in its way counts once it has moved a square),
+// then Play begins. The game clock stays stopped during the opening, so cooldowns, the
+// placement interval and the time limit start counting with Play; only the hold limit counts,
+// on the caller's clock while in Opening. A cooldown does not hold a lift in Opening, and the
+// hold limit there puts the piece back without one (on the stopped clock either would last the
+// whole opening, and with every human piece locked the opening could never end).
 class Game {
  public:
   explicit Game(const Rules& rules = Rules());
@@ -47,13 +59,15 @@ class Game {
   void start(uint32_t now);
   // Advances time and runs the timers: a pending placement lands (or is dropped) once the
   // interval has passed, a piece held for maxHoldMs goes back to its square, and the time limit
-  // ends the game.
+  // ends the game. A countdown ends in Play, or in Opening while an opening move is still to be
+  // made.
   void tick(uint32_t now);
-  // Play -> Paused -> Countdown -> Play. Does not resume while mismatch() is set.
+  // Play (or Opening) -> Paused -> Countdown -> Play (or Opening). Does not resume while
+  // mismatch() is set.
   void togglePause(uint32_t now);
 
   // Board-mismatch pause (plan 2026-10-31 3.2; firmware only). cells: squares (r*n+c) where the
-  // sensors disagree with the game. From Play or Removing (otherwise ignored): goes to Paused,
+  // sensors disagree with the game. From Play, Opening or Removing (otherwise ignored): goes to Paused,
   // remembers the phase and sets mismatch(). A human piece that should be on one of the cells
   // gets a human cooldown; when a cell holds no piece in the game, the held pieces (one may have
   // been put there) get it too, so putting a held piece back still carries it.
@@ -65,23 +79,30 @@ class Game {
   // In the countdown entered by resumeFromMismatch (MachineController reads during it).
   bool mismatchCountdown() const { return phase_ == Phase::Countdown && mismatchCountdown_; }
 
+  // From Play or Opening. In Opening only one piece is in hand, and none once the human's opening
+  // move is made (OpeningDone, a violation); cooldowns do not refuse a lift there.
   LiftResult onHumanLift(int r, int c, uint32_t now);
   // placedAt: caller time the piece was put down (<= now; the firmware's sensor confirms a
   // placement some time after it happened). The placement interval and the hold limit are
   // judged at placedAt. A placement less than humanIntervalMs after the previous one returns
   // Pending: the piece stays held (off the board) until tick() reaches the end of the interval.
   // While pending, the same piece put on its origin cancels and put elsewhere replaces the target.
+  // In Opening the placement interval does not apply and a placement that lands is the human's
+  // opening move.
   PlaceResult onHumanPlace(int r, int c, uint32_t now, uint32_t placedAt);
   PlaceResult onHumanPlace(int r, int c, uint32_t now) { return onHumanPlace(r, c, now, now); }
 
   // True (and reserves the square) when (r,c) is empty, not reserved and not blocked for the
-  // machine (origin of a held piece, target of a pending placement).
+  // machine (origin of a held piece, target of a pending placement). False in Opening once the
+  // machine's opening move is made.
   bool machineCanEnter(int pieceId, int r, int c);
   // Origin of a held piece or target of the pending placement: the machine must not go there.
   bool machineBlocked(int r, int c) const;
   // Moves the piece to (r,c) and releases the reservation. Also valid while Removing.
   void onMachineStep(int pieceId, int r, int c);
-  // Sets the machine cooldown and checks captures by the machine at the piece's square.
+  // Sets the machine cooldown and checks captures by the machine at the piece's square. In
+  // Opening, the arrival of a piece that has moved at least one square is the machine's opening
+  // move.
   CaptureResult onMachineArrive(int pieceId, uint32_t now);
   // Job aborted: releases the reservation (no arrival). The cooldown is set only if the piece
   // moved at least one square; a piece that never left its square can move again at once.
@@ -120,6 +141,11 @@ class Game {
   Sq pendingCell() const;
   // Pieces put back by the hold limit since reset().
   int holdTimeouts() const { return holdTimeouts_; }
+  // Whether `side` (HUMAN or MACHINE) has made its opening move (RW); always true without RW.
+  bool openingDone(int8_t side) const { return openingDone_[side == HUMAN ? HUMAN : MACHINE]; }
+  // Squares of the pieces on the board not moved to another square for Rules::untouchedMs (RU);
+  // empty when RU is off.
+  SquareSet stale() const;
   Snapshot snapshot(float headR, float headC) const;
 
  private:
@@ -132,6 +158,12 @@ class Game {
   void unhold(int id);
   // Game clock at caller time t (<= now, after advance(now)); never before 0.
   uint32_t clockAt(uint32_t t) const;
+  // The same for the opening clock (caller time spent in Opening).
+  uint32_t openingClockAt(uint32_t t) const;
+  // Opening -> Play once both sides have made their opening move.
+  void finishOpening();
+  // The machine's opening move is made (when the piece that moved arrives or is aborted).
+  void machineOpeningMove(int pieceId);
   // Whether the held piece p may be put on (r,c) of b: as a destination, or (escape) by the
   // escape rule (origin filled and no destination).
   bool placeLegal(const PieceView& p, const Board& b, int r, int c, bool escape) const;
@@ -172,4 +204,10 @@ class Game {
   bool mismatch_;
   Phase mismatchFrom_;
   bool mismatchCountdown_;
+  // Opening (RW): which side has made its move, the machine piece that has stepped for it (-1),
+  // caller time spent in Opening and its value when the held piece was lifted.
+  bool openingDone_[3];
+  int openingMover_;
+  uint32_t openingClock_;
+  uint32_t liftOpening_;
 };

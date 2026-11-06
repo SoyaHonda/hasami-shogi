@@ -74,6 +74,9 @@ struct BotRaceEval {
 // of 5.2). Keeps to the human rules of plan 2026-10-31 3.1: lifts only when no piece is held,
 // holds for less than the hold limit, and after a Pending placement waits until it lands (or is
 // dropped, then places again). The caller executes the action and reports the result back.
+// Rule candidates (plan 2026-11-06 3.1): captures are those of the game's rules (Capture.h), a
+// move that makes a wall (RW) is never chosen, and in Phase::Opening the bot makes its one
+// opening move the same way, paced on the caller's clock.
 class HumanBot {
  public:
   HumanBot(const BotParams& p = BotParams(), uint32_t seed = 1);
@@ -86,8 +89,11 @@ class HumanBot {
   void reset();
   void reseed(uint32_t seed) { rng_.reseed(seed); }
 
-  // (headR, headC): where the machine's head is (the race styles read it).
-  BotAction decide(const Game& game, float headR, float headC);
+  // (headR, headC): where the machine's head is (the race styles read it). now: the caller's
+  // clock, which paces the opening move (the game clock is stopped in Phase::Opening; the
+  // overloads without it pass the game clock, so the bot never moves there).
+  BotAction decide(const Game& game, float headR, float headC, uint32_t now);
+  BotAction decide(const Game& game, float headR, float headC) { return decide(game, headR, headC, game.clockMs()); }
   BotAction decide(const Game& game) { return decide(game, 0.0f, static_cast<float>(game.rules().n / 2)); }
   // Results of executing the action returned by decide().
   void onLifted(const Game& game, bool ok, int r, int c);
@@ -103,6 +109,9 @@ class HumanBot {
   BotMove chooseTrap(const Game& game);
   BotMove chooseRace(const Game& game, float headR, float headC, bool search);
   BotAction putDown(const Game& game, float headR, float headC);
+  // Lifts the chosen move's piece, or a random movable piece for BotMove::Random.
+  BotAction liftFor(const Game& game, const BotMove& m);
+  BotAction decideOpening(const Game& game, float headR, float headC, uint32_t now);
   uint32_t moveTime(const Game& game);
 
   BotParams params_;
@@ -116,4 +125,8 @@ class HumanBot {
   bool armed_;
   uint32_t nextAt_;
   int failures_;
+  // Opening: the caller's clock of the latest decide() and of the next action there.
+  uint32_t now_;
+  bool openArmed_;
+  uint32_t openNextAt_;
 };

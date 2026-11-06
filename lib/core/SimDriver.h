@@ -57,6 +57,9 @@ struct State {
   int stuckId;
   // Held piece whose placement is pending and its target square (-1 when none).
   int pendingId, pendingR, pendingC;
+  // Opening (RW, plan 2026-11-06 3.1): whether each side has made its opening move (both true
+  // without RW).
+  bool openingHuman, openingMachine;
   SimEvent events[MAX_EVENTS];  // newest first
   int eventCount;
 };

@@ -8,7 +8,7 @@ const { Phase, Winner, Level, PlaceResult, EventKind } = m;
 const HUMAN = 1;
 const KAN = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
 const $ = (id) => document.getElementById(id);
-const boardEl = $('board'), cellsEl = $('cells'), layerEl = $('layer'), overlayEl = $('overlay');
+const boardEl = $('board'), cellsEl = $('cells'), layerEl = $('layer'), overlayEl = $('overlay'), bannerEl = $('banner');
 
 // Settings start from the C++ defaults (no second copy of them here).
 const D = m.defaults();
@@ -22,7 +22,7 @@ let activeRules = { ...rules }; // rules of the game on the board (setRules appl
 let cellEls = [], komaEls = new Map(), headEl = null;
 let carried = new Set(); // captured pieces the machine has started carrying off
 let log = [], lastSeq = 0, logDirty = true;
-let overlayKind = undefined;
+let overlayKind = undefined, bannerKey = '';
 let countdownLeft = 0, prevPhase = S.phase;
 
 const sq = (r, c) => `${N - c}${KAN[r]}`;
@@ -216,6 +216,8 @@ function build() {
   $('ranks').style.gridTemplateRows = `repeat(${N},1fr)`;
   $('ranks').innerHTML = Array.from({ length: N }, (_, r) => `<span>${KAN[r]}</span>`).join('');
   overlayKind = undefined;
+  bannerKey = null;
+  $('legendEdge').hidden = !activeRules.edgeCapture;
   sizeCells();
 }
 function sizeCells() {
@@ -225,6 +227,7 @@ function sizeCells() {
 new ResizeObserver(sizeCells).observe(boardEl);
 
 // LED color (0xRRGGBB from LedPlan) -> the theme's color for that kind of light and its brightness.
+// The edge hint of RE (LED_EDGE_HINT) is the yellow at 40 %: kind 'hint'.
 const LED_KINDS = [
   [0x0000ff, 'blue', 'var(--blue)'],
   [0xa000ff, 'purple', 'var(--cyan)'],
@@ -238,7 +241,11 @@ function ledLook(v) {
   const mx = Math.max(r, g, b);
   // Normalize to full brightness, then match the hue (cooldown red is scaled by the time left).
   const full = (Math.round((r * 255) / mx) << 16) | (Math.round((g * 255) / mx) << 8) | Math.round((b * 255) / mx);
-  for (const [rgb, kind, css] of LED_KINDS) if (rgb === full) return { kind, css, glow: mx / 255 };
+  for (const [rgb, kind, css] of LED_KINDS) {
+    if (rgb !== full) continue;
+    if (kind === 'yellow' && mx < 160) return { kind: 'hint', css, glow: mx / 255 };
+    return { kind, css, glow: mx / 255 };
+  }
   return { kind: 'other', css: `rgb(${(full >> 16) & 255},${(full >> 8) & 255},${full & 255})`, glow: mx / 255 };
 }
 
@@ -320,6 +327,7 @@ function render() {
   updateLog();
   if (logDirty) renderLog();
   updateOverlay();
+  updateBanner();
 }
 function fmt(ms) {
   const s = ms / 1000;
@@ -337,6 +345,12 @@ function statusText() {
   if (is(ph, Phase.Paused)) return '一時停止中です。';
   if (is(ph, Phase.Removing)) return '駒が取られたので、機械が盤外へ運び出しています。';
   if (is(ph, Phase.Over)) return `${winnerText()}です。`;
+  if (is(ph, Phase.Opening)) {
+    if (S.openingHuman) return '最初の一手を指しました。機械が指し終えると時計が動き出します。';
+    const oh = heldPiece();
+    if (oh) return `${sq(oh.r, oh.c)}の歩を持ち上げています。最初の一手を置いてください（元のマスに戻すと取り消し）。`;
+    return '最初の一手：歩を1つ動かしてください。両者が1手ずつ指すと時計が動き出します。';
+  }
   const h = heldPiece();
   if (isPending(h)) return `${sq(S.pendingR, S.pendingC)}に置きました。前の置きから${(activeRules.humanIntervalMs / 1000).toFixed(1)}秒たつと確定します。`;
   if (h) return `${sq(h.r, h.c)}の歩を持ち上げています。置くマスで離すかクリック、元のマスで取り消し。`;
@@ -385,6 +399,19 @@ function renderLog() {
   el.innerHTML = log.map((l) => `<li><time>${fmt(l.t)}</time><span class="${l.kind}">${l.text}</span></li>`).join('');
 }
 
+/* ---------- opening banner ---------- */
+// Phase.Opening (RW): which side has made its opening move. The board stays playable.
+function updateBanner() {
+  const opening = is(S.phase, Phase.Opening);
+  const key = opening ? `${S.openingHuman}|${S.openingMachine}` : '';
+  if (key === bannerKey) return;
+  bannerKey = key;
+  bannerEl.hidden = !opening;
+  if (!opening) return;
+  const side = (name, done) => `<span class="${done ? 'done' : ''}">${name}：${done ? '指した' : 'まだ'}</span>`;
+  bannerEl.innerHTML = `<b>最初の一手</b>${side('あなた', S.openingHuman)}${side('機械', S.openingMachine)}`;
+}
+
 /* ---------- overlay ---------- */
 function lastCaptureCount() {
   const e = S.events.find((x) => is(x.kind, EventKind.Capture));
@@ -410,8 +437,10 @@ function showOverlay(kind, n) {
     return;
   }
   overlayEl.hidden = false;
-  if (kind === 'ready')
-    overlayEl.innerHTML = `<div class="card"><div class="big">対局開始</div><p>ターンはありません。歩をつかんで、好きなときに動かしてください。</p><button class="btn" id="ovStart">開始</button></div>`;
+  if (kind === 'ready') {
+    const first = activeRules.wallLimit ? '最初に両者が1手ずつ指してから時計が動き出します。' : '';
+    overlayEl.innerHTML = `<div class="card"><div class="big">対局開始</div><p>ターンはありません。歩をつかんで、好きなときに動かしてください。${first}</p><button class="btn" id="ovStart">開始</button></div>`;
+  }
   if (kind === 'countdown') overlayEl.innerHTML = `<div class="card"><div class="big" id="cdNum">3</div></div>`;
   if (kind === 'removing') overlayEl.innerHTML = `<div class="card"><div class="big">回収中</div><p>${n}枚を盤外へ運び出しています</p></div>`;
   if (kind === 'paused') overlayEl.innerHTML = `<div class="card"><div class="big">一時停止</div><button class="btn" id="ovResume">再開</button></div>`;
@@ -471,6 +500,28 @@ $('diff').oninput = (e) => {
     applyRules(false);
   }
 };
+
+// Rule candidates (plan 2026-11-06 3.1): from the next game, like the other rules.
+function showRuleCandidates() {
+  $('ruleEdge').checked = rules.edgeCapture;
+  $('ruleWall').checked = rules.wallLimit;
+  for (const [ms, id] of [[0, 'ruOff'], [20000, 'ru20'], [40000, 'ru40']]) $(id).setAttribute('aria-pressed', rules.untouchedMs === ms);
+}
+$('ruleEdge').onchange = (e) => {
+  rules.edgeCapture = e.target.checked;
+  applyRules(false);
+};
+$('ruleWall').onchange = (e) => {
+  rules.wallLimit = e.target.checked;
+  applyRules(false);
+};
+for (const [ms, id] of [[0, 'ruOff'], [20000, 'ru20'], [40000, 'ru40']])
+  $(id).onclick = () => {
+    rules.untouchedMs = ms;
+    applyRules(false);
+    showRuleCandidates();
+  };
+showRuleCandidates();
 
 // A range input bound to a setting: init from the current value, write back on input.
 function bindRange(id, get, set, fmtF) {

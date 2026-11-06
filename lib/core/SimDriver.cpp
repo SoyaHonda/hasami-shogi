@@ -1,5 +1,6 @@
 #include "SimDriver.h"
 #include <cstring>
+#include "Capture.h"
 #include "LedPlan.h"
 #include "RaceTime.h"
 
@@ -158,7 +159,7 @@ void SimDriver::noteLosses() {
 }
 
 void SimDriver::runBot() {
-  const BotAction a = bot_.decide(game_, gantry_.headR(), gantry_.headC());
+  const BotAction a = bot_.decide(game_, gantry_.headR(), gantry_.headC(), now_);
   if (a.kind == BotAction::Lift) {
     const LiftResult res = lift(a.r, a.c);
     bot_.onLifted(game_, res == LiftResult::Ok, a.r, a.c);
@@ -175,13 +176,16 @@ LiftResult SimDriver::lift(int r, int c) {
   const int id = game_.heldIds()[game_.heldCount() - 1];
   // Did the lifted piece have a capturing destination (same as `lift` in the original)?
   Board b = game_.boardWithoutHeld();
+  const Rules& rules = game_.rules();
+  const SquareSet stale = game_.stale();
   int d[MAX_N * MAX_N];
   const int k = dests(b, r, c, d);
   bool threat = false;
   for (int i = 0; i < k && !threat; i++) {
+    if (makesWall(b, rules, HUMAN, r, c, d[i] / b.n, d[i] % b.n)) continue;
     int caps[MAX_N * MAX_N];
     b.cells[d[i]] = HUMAN;
-    if (capturesAt(b, HUMAN, d[i] / b.n, d[i] % b.n, caps) > 0) threat = true;
+    if (captures(b, rules, HUMAN, d[i] / b.n, d[i] % b.n, caps, &stale) > 0) threat = true;
     b.cells[d[i]] = EMPTY;
   }
   lift_[id] = LiftInfo{threat, false};
@@ -265,6 +269,8 @@ State SimDriver::state() const {
   s.pendingId = game_.pendingId();
   s.pendingR = game_.pendingCell().r;
   s.pendingC = game_.pendingCell().c;
+  s.openingHuman = game_.openingDone(HUMAN);
+  s.openingMachine = game_.openingDone(MACHINE);
   s.eventCount = eventCount_;
   for (int i = 0; i < eventCount_; i++) {
     const int idx = (eventHead_ - 1 - i + 2 * MAX_EVENTS) % MAX_EVENTS;

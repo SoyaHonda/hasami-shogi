@@ -24,6 +24,14 @@ test('thinkCase reads the optional gap and lift fields', () => {
   assert.equal(m.thinkCase('M...H.... 2,1 0,0 - 1001 - 3,1.5,100,250,H,0.25,0 none').parsed, false);
 });
 
+test('thinkCase reads the optional rules field', () => {
+  assert.equal(m.thinkCase('M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 RE+RW none').parsed, true);
+  assert.equal(m.thinkCase('M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 RU20000+OPEN none').parsed, true);
+  assert.equal(m.thinkCase('M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 RX none').parsed, false);
+  // In the opening "stay" is no answer.
+  assert.equal(m.thinkCase('M...H.... - 0,0 - - - 3,1.5,100,250,H,0.25,0 OPEN none').none, false);
+});
+
 test('WASM matches every line of test/golden/ai_cases.txt', () => {
   const lines = readFileSync(table, 'utf8').split(/\r?\n/);
   let cases = 0;

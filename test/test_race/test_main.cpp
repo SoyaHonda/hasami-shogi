@@ -563,6 +563,146 @@ void test_lines() {
   TEST_ASSERT_EQUAL_INT(2, out[5].c);
 }
 
+// ---- RE (plan 2026-11-06 3.1-3.2): the time the human needs to enclose an edge group ----
+
+static float groupTime(const Snapshot& s, int r, int c, Params p = Params()) {
+  const RaceTimes t = raceTimes(s, p);
+  RaceState st;
+  raceInit(st, s, t);
+  const RaceLine G = raceGroupThrough(st.board, t, MACHINE, r, c);
+  if (G.len == 0) return RACE_INF;
+  TEST_ASSERT_TRUE(raceIsGroup(G));
+  return raceHumanTime(st, t, G);
+}
+
+void test_re_group_needs_every_liberty_filled() {
+  // The corner piece (0,0) has two liberties, (0,1) and (1,0): (0,3) and (4,0) fill them in
+  // turn, as H2 (500, then the interval: 1500).
+  Snapshot s = makeSnap(
+      "M..H...\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "H......\n"
+      ".......\n"
+      ".......");
+  TEST_ASSERT_TRUE(raceInf(groupTime(s, 0, 0)));  // R0: no edge capture
+  TEST_ASSERT_TRUE(raceInf(thAt(s, 0, 0, 0, 1)));
+  s.edgeCapture = true;
+  TEST_ASSERT_EQUAL_FLOAT(1500.0f, groupTime(s, 0, 0));
+  // The custodian lines through it still reach the edge.
+  TEST_ASSERT_TRUE(raceInf(thAt(s, 0, 0, 0, 1)));
+  TEST_ASSERT_TRUE(raceInf(thAt(s, 0, 0, 1, 0)));
+  // A piece away from the edge is no group of RE.
+  Snapshot mid = makeSnap(
+      ".......\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "HHH....");
+  mid.edgeCapture = true;
+  TEST_ASSERT_TRUE(raceInf(groupTime(mid, 2, 3)));
+}
+
+void test_re_group_one_liberty_is_h1_and_enclosers_stay() {
+  // (0,1) already encloses the corner and must stay; (4,0) fills (1,0): 500.
+  Snapshot s = makeSnap(
+      "MH.....\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "H......\n"
+      ".......\n"
+      ".......");
+  s.edgeCapture = true;
+  TEST_ASSERT_EQUAL_FLOAT(500.0f, groupTime(s, 0, 0));
+  // Easy reads only the held piece's single placement.
+  Params easy;
+  easy.level = Level::Easy;
+  TEST_ASSERT_TRUE(raceInf(groupTime(s, 0, 0, easy)));
+  // Without (4,0) only the encloser could fill it, which opens its own square: never.
+  Snapshot alone = makeSnap(
+      "MH.....\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......");
+  alone.edgeCapture = true;
+  TEST_ASSERT_TRUE(raceInf(groupTime(alone, 0, 0)));
+}
+
+void test_re_enclosed_group_falls_to_step_away_and_back() {
+  // Already enclosed (no liberty): (0,1) steps away and (0,4) slides into its square (H3).
+  Snapshot s = makeSnap(
+      "MH..H..\n"
+      "H......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......");
+  s.edgeCapture = true;
+  TEST_ASSERT_EQUAL_FLOAT(1500.0f, groupTime(s, 0, 0));
+}
+
+void test_re_group_risk_reaches_its_pieces() {
+  // The corner group closes at 500, before any guard can start (450 + margin 200): its risk
+  // goes to the piece.
+  Snapshot s = makeSnap(
+      "MH.....\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "H......\n"
+      ".......\n"
+      ".......");
+  for (int edge = 0; edge < 2; edge++) {
+    s.edgeCapture = edge == 1;
+    const RaceTimes t = raceTimes(s, Params());
+    RaceState st;
+    raceInit(st, s, t);
+    RaceLineEval ev[RACE_MAX_LINES];
+    const int k = raceAssess(st, t, ev);
+    int groups = 0;
+    for (int i = 0; i < k; i++) {
+      if (!raceIsGroup(ev[i].line)) continue;
+      groups++;
+      TEST_ASSERT_EQUAL_FLOAT(500.0f, ev[i].th);
+      TEST_ASSERT_TRUE(ev[i].danger);
+      TEST_ASSERT_FALSE(ev[i].guarded);
+      TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.575f, ev[i].risk);
+    }
+    TEST_ASSERT_EQUAL_INT(edge, groups);
+    float risk[MAX_N * MAX_N];
+    racePieceRisk(st.board, ev, k, risk);
+    TEST_ASSERT_FLOAT_WITHIN(1e-4f, edge ? 0.575f : 0.0f, risk[0]);
+  }
+}
+
+void test_re_corner_is_no_safe_destination() {
+  // (2,0) -> (0,0): a corner next to H(0,1), whose last liberty (1,0) H(1,4) fills at once.
+  // Safe under R0 (the corner cannot be taken), not under RE.
+  Snapshot s = makeSnap(
+      ".H.....\n"
+      "....H..\n"
+      "M......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......");
+  for (int edge = 0; edge < 2; edge++) {
+    s.edgeCapture = edge == 1;
+    const RaceTimes t = raceTimes(s, Params());
+    RaceState st;
+    raceInit(st, s, t);
+    TEST_ASSERT_EQUAL_INT(edge == 0, (int)raceSafeDest(st, t, 2, 0, 0, 0, 500.0f));
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_trap_a_h2);
@@ -586,5 +726,10 @@ int main(int, char**) {
   RUN_TEST(test_risk_formula);
   RUN_TEST(test_machine_time_and_gain);
   RUN_TEST(test_lines);
+  RUN_TEST(test_re_group_needs_every_liberty_filled);
+  RUN_TEST(test_re_group_one_liberty_is_h1_and_enclosers_stay);
+  RUN_TEST(test_re_enclosed_group_falls_to_step_away_and_back);
+  RUN_TEST(test_re_group_risk_reaches_its_pieces);
+  RUN_TEST(test_re_corner_is_no_safe_destination);
   return UNITY_END();
 }

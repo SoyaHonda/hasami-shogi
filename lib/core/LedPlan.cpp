@@ -1,4 +1,5 @@
 #include "LedPlan.h"
+#include "Capture.h"
 
 void ledPlan(const Game& game, const MachineController& mc, uint32_t now, Rgb out[], const bool mismatch[]) {
   const int n = game.rules().n;
@@ -20,24 +21,46 @@ void ledPlan(const Game& game, const MachineController& mc, uint32_t now, Rgb ou
     out[p.r * n + p.c] = Rgb{v, 0, 0};
   }
 
-  // Blue, then yellow on top: destinations of held pieces.
+  const Rules& rules = game.rules();
   const Phase ph = game.phase();
-  if (game.heldCount() > 0 && (ph == Phase::Play || ph == Phase::Removing || game.mismatch())) {
+  // Edge hint (RE): the last empty neighbour of an edge group, either side's.
+  if (rules.edgeCapture && (ph == Phase::Play || ph == Phase::Opening)) {
+    const Board plain = game.boardWithoutHeld();
+    SquareSet seen;
+    seen.clear();
+    for (int i = 0; i < n * n; i++) {
+      if (plain.cells[i] == EMPTY || seen.has(i)) continue;
+      EdgeGroup g;
+      if (!edgeGroupAt(plain, i / n, i % n, g)) {
+        seen.set(i);
+        continue;
+      }
+      for (int w = 0; w < 3; w++) seen.w[w] |= g.cells.w[w];
+      if (g.libCount == 1) out[g.libs[0]] = LED_EDGE_HINT;
+    }
+  }
+
+  // Blue, then yellow on top: destinations of held pieces.
+  if (game.heldCount() > 0 &&
+      (ph == Phase::Play || ph == Phase::Opening || ph == Phase::Removing || game.mismatch())) {
     const Board withReserve = game.boardWithReserve();
     Board plain = game.boardWithoutHeld();
     const bool readLift = mc.params().readLift;
+    const SquareSet stale = game.stale();
     for (int h = 0; h < game.heldCount(); h++) {
       const PieceView& p = pieces[game.heldIds()[h] - 1];
       int d[MAX_N * MAX_N];
       int k = dests(withReserve, p.r, p.c, d);
-      for (int j = 0; j < k; j++) out[d[j]] = LED_BLUE;
+      for (int j = 0; j < k; j++)
+        if (!makesWall(withReserve, rules, HUMAN, p.r, p.c, d[j] / n, d[j] % n)) out[d[j]] = LED_BLUE;
       if (!readLift) continue;
       // Same as `threat` in the original simulator.
       k = dests(plain, p.r, p.c, d);
       for (int j = 0; j < k; j++) {
+        if (makesWall(plain, rules, HUMAN, p.r, p.c, d[j] / n, d[j] % n)) continue;
         int caps[MAX_N * MAX_N];
         plain.cells[d[j]] = HUMAN;
-        const int nc = capturesAt(plain, HUMAN, d[j] / n, d[j] % n, caps);
+        const int nc = captures(plain, rules, HUMAN, d[j] / n, d[j] % n, caps, &stale);
         plain.cells[d[j]] = EMPTY;
         if (nc > 0) out[d[j]] = LED_YELLOW;
       }
