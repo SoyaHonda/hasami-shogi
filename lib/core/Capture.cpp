@@ -128,3 +128,13 @@ bool completesWall(const Board& b, int8_t side, int fr, [[maybe_unused]] int fc,
 bool makesWall(const Board& b, const Rules& rules, int8_t side, int fr, int fc, int tr, int tc) {
   return rules.wallLimit && completesWall(b, side, fr, fc, tr, tc);
 }
+
+bool wallOnPath(const Board& b, int8_t side, int fr, int fc, int tr, int tc) {
+  // Along a row the piece leaves its own square in that row empty: never a wall.
+  if (fr == tr) return false;
+  const int dr = tr > fr ? 1 : -1;
+  for (int r = fr + dr;; r += dr) {
+    if (completesWall(b, side, fr, fc, r, tc)) return true;
+    if (r == tr) return false;
+  }
+}

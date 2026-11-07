@@ -559,7 +559,8 @@ __attribute__((noinline)) bool forkBroken(const Ctx& x, const RaceState& st, con
 }
 
 // Calls f(cand) for "stay" and every legal move of a cooled-down machine piece, in order (RW: not
-// the moves that make a wall).
+// the moves that make a wall, nor those whose drag passes a square where the piece would complete
+// one: the controller stops the drag before such a square, Game::machineCanEnter).
 template <typename F>
 void forEachCandidate(const Snapshot& s, const RaceState& st, F f) {
   f(Cand{0, -1, -1, -1});
@@ -573,7 +574,7 @@ void forEachCandidate(const Snapshot& s, const RaceState& st, F f) {
     int d[MAX_N * MAX_N];
     const int k = dests(mb, q.r, q.c, d);
     for (int j = 0; j < k; j++) {
-      if (s.wallLimit && completesWall(mb, MACHINE, q.r, q.c, d[j] / n, d[j] % n)) continue;
+      if (s.wallLimit && wallOnPath(mb, MACHINE, q.r, q.c, d[j] / n, d[j] % n)) continue;
       f(Cand{index++, i, d[j] / n, d[j] % n});
     }
   }

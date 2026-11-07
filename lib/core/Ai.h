@@ -89,8 +89,9 @@ struct AiCandidate {
 };
 
 // "Stay" plus every legal move of up to MAX_N machine pieces. Under RW a move that makes a wall
-// is not legal, so it is no candidate. With Snapshot::mustMove "stay" is listed but never
-// contends.
+// is not legal, so it is no candidate; nor is one whose drag passes a square where the piece
+// would complete a wall (wallOnPath of Capture.h; the drag would stop before it). With
+// Snapshot::mustMove "stay" is listed but never contends.
 constexpr int AI_MAX_CANDIDATES = 1 + MAX_N * 2 * (MAX_N - 1);
 
 // Machine move choice (plan 2026-10-31 3.9-3.11; pure function of the snapshot). Implemented in

@@ -1102,6 +1102,37 @@ void test_wall_limit_human_wall_is_illegal() {
   TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)r0.onHumanPlace(6, 2, 7100));
 }
 
+// RW (user decision 2026-11-07): a machine piece never comes to rest where it completes a wall,
+// not even when its drag is stopped short. machineCanEnter refuses such a square (without
+// reserving it), so the drag stops one square earlier. Without RW the square is open.
+void test_wall_limit_machine_cannot_enter_a_wall_square() {
+  for (int wall = 0; wall < 2; wall++) {
+    Rules rules;
+    rules.wallLimit = wall == 1;
+    Game g(rules);
+    g.start(0);
+    g.tick(3000);
+    // The opening moves under RW (plain moves under R0): H (6,0)->(5,0), M (0,0)->(3,0).
+    TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 0, 3000));
+    TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 0, 3100));
+    TEST_ASSERT_EQUAL_INT(3, dragMachine(g, mId(0), 3, 0));
+    g.onMachineArrive(mId(0), 3200);
+    TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+    // Row 3 holds machine pieces on (3,0)..(3,5); (3,6) is the gap. M(0,6) heads down column 6.
+    for (int c = 1; c < 6; c++) teleport(g, mId(c), 3, c);
+    const bool canEnter = g.machineCanEnter(mId(6), 3, 6);
+    TEST_ASSERT_EQUAL_INT(wall ? 0 : 1, (int)canEnter);
+    // R0: the square was reserved; release it as an abort would.
+    if (canEnter) g.onMachineAbort(mId(6), 3300, false);
+    TEST_ASSERT_EQUAL_INT(-1, g.reservedBy());
+    // The drag towards (5,6), stopped short or not, never rests on (3,6) under RW.
+    TEST_ASSERT_EQUAL_INT(wall ? 2 : 5, dragMachine(g, mId(6), 5, 6));
+    TEST_ASSERT_EQUAL_INT(wall ? 2 : 5, piece(g, mId(6)).r);
+    // Sliding along the row into the gap leaves a gap behind: allowed under RW too.
+    if (wall) TEST_ASSERT_TRUE(g.machineCanEnter(mId(5), 3, 6));
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_initial_position);
@@ -1154,5 +1185,6 @@ int main(int, char**) {
   RUN_TEST(test_opening_machine_stops_short_and_it_counts);
   RUN_TEST(test_opening_pause_returns_to_opening);
   RUN_TEST(test_wall_limit_human_wall_is_illegal);
+  RUN_TEST(test_wall_limit_machine_cannot_enter_a_wall_square);
   return UNITY_END();
 }

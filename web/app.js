@@ -218,6 +218,7 @@ function build() {
   overlayKind = undefined;
   bannerKey = null;
   $('legendEdge').hidden = !activeRules.edgeCapture;
+  $('legendRuWarn').hidden = $('legendRuVuln').hidden = !(activeRules.untouchedMs > 0);
   sizeCells();
 }
 function sizeCells() {
@@ -227,13 +228,16 @@ function sizeCells() {
 new ResizeObserver(sizeCells).observe(boardEl);
 
 // LED color (0xRRGGBB from LedPlan) -> the theme's color for that kind of light and its brightness.
-// The edge hint of RE (LED_EDGE_HINT) is the yellow at 40 %: kind 'hint'.
+// The edge hint of RE (LED_EDGE_HINT) is the yellow at 40 %: kind 'hint'. RU: the warning green
+// (LED_RU_WARN, brighter as the piece nears untouchedMs) and the vulnerable cyan (LED_RU_VULNERABLE).
 const LED_KINDS = [
   [0x0000ff, 'blue', 'var(--blue)'],
   [0xa000ff, 'purple', 'var(--cyan)'],
   [0xffc800, 'yellow', 'var(--red)'],
   [0xffffff, 'white', 'var(--white-led)'],
   [0xff0000, 'red', 'var(--amber)'],
+  [0x00ff00, 'ruwarn', 'var(--ru-warn)'],
+  [0x00ffff, 'ruvuln', 'var(--ru-vuln)'],
 ];
 function ledLook(v) {
   if (!v) return null;
@@ -502,10 +506,14 @@ $('diff').oninput = (e) => {
 };
 
 // Rule candidates (plan 2026-11-06 3.1): from the next game, like the other rules.
+// RU: on/off plus its duration (the slider, 20-90 s; it keeps its value while RU is off and starts
+// from the input's value="40" unless the C++ default turns RU on).
+let ruSec = rules.untouchedMs > 0 ? rules.untouchedMs / 1000 : parseFloat($('ruSec').value);
 function showRuleCandidates() {
   $('ruleEdge').checked = rules.edgeCapture;
   $('ruleWall').checked = rules.wallLimit;
-  for (const [ms, id] of [[0, 'ruOff'], [20000, 'ru20'], [40000, 'ru40']]) $(id).setAttribute('aria-pressed', rules.untouchedMs === ms);
+  $('ruleUntouched').checked = rules.untouchedMs > 0;
+  $('ruSec').disabled = !(rules.untouchedMs > 0);
 }
 $('ruleEdge').onchange = (e) => {
   rules.edgeCapture = e.target.checked;
@@ -515,12 +523,18 @@ $('ruleWall').onchange = (e) => {
   rules.wallLimit = e.target.checked;
   applyRules(false);
 };
-for (const [ms, id] of [[0, 'ruOff'], [20000, 'ru20'], [40000, 'ru40']])
-  $(id).onclick = () => {
-    rules.untouchedMs = ms;
+$('ruleUntouched').onchange = (e) => {
+  rules.untouchedMs = e.target.checked ? Math.round(ruSec * 1000) : 0;
+  applyRules(false);
+  showRuleCandidates();
+};
+bindRange('ruSec', () => ruSec, (v) => {
+  ruSec = v;
+  if (rules.untouchedMs > 0) {
+    rules.untouchedMs = Math.round(v * 1000);
     applyRules(false);
-    showRuleCandidates();
-  };
+  }
+}, (v) => Math.round(v) + ' 秒');
 showRuleCandidates();
 
 // A range input bound to a setting: init from the current value, write back on input.

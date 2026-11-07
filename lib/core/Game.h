@@ -39,7 +39,8 @@ struct Violation {
 // advances only during Play and cooldowns are measured on it.
 //
 // Rule candidates (plan 2026-11-06 3.1, Rules): captures are judged by captures() of Capture.h
-// (RE, RU); under RW a placement that makes a wall is Illegal, and the start countdown leads to
+// (RE, RU); under RW a placement that makes a wall is Illegal, a machine piece does not enter a
+// square where it would complete one (machineCanEnter), and the start countdown leads to
 // Phase::Opening. There each side moves one piece to another square (a cancel does not count; a
 // machine piece stopped short by a human piece in its way counts once it has moved a square),
 // then Play begins. The game clock stays stopped during the opening, so cooldowns, the
@@ -94,7 +95,9 @@ class Game {
 
   // True (and reserves the square) when (r,c) is empty, not reserved and not blocked for the
   // machine (origin of a held piece, target of a pending placement). False in Opening once the
-  // machine's opening move is made.
+  // machine's opening move is made. False under RW where the piece, coming to rest on (r,c),
+  // would complete a wall (makesWall): a drag can stop on any square it enters, so it stops one
+  // square before such a square (user decision 2026-11-07).
   bool machineCanEnter(int pieceId, int r, int c);
   // Origin of a held piece or target of the pending placement: the machine must not go there.
   bool machineBlocked(int r, int c) const;

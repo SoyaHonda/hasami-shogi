@@ -23,6 +23,25 @@ void ledPlan(const Game& game, const MachineController& mc, uint32_t now, Rgb ou
 
   const Rules& rules = game.rules();
   const Phase ph = game.phase();
+  // RU: pieces of both sides close to (warning) or past (vulnerable) untouchedMs without a move.
+  if (rules.untouchedMs > 0 && ph != Phase::Ready && ph != Phase::Over) {
+    for (int i = 0; i < game.pieceCount(); i++) {
+      const PieceView& p = pieces[i];
+      if (!p.alive || p.held || p.id == game.reservedBy()) continue;  // off the board
+      const uint32_t age = clock > p.movedAt ? clock - p.movedAt : 0;
+      if (age >= rules.untouchedMs) {
+        out[p.r * n + p.c] = LED_RU_VULNERABLE;
+        continue;
+      }
+      const uint32_t rem = rules.untouchedMs - age;
+      if (rem > LED_RU_WARN_MS) continue;
+      // Brightness from LED_RU_WARN_MIN (10 s to go) rising to 255 (integer math).
+      const uint32_t v = LED_RU_WARN_MIN + ((255u - LED_RU_WARN_MIN) * (LED_RU_WARN_MS - rem)) / LED_RU_WARN_MS;
+      const auto scale = [v](uint8_t ch) { return static_cast<uint8_t>((ch * v) / 255u); };
+      out[p.r * n + p.c] = Rgb{scale(LED_RU_WARN.r), scale(LED_RU_WARN.g), scale(LED_RU_WARN.b)};
+    }
+  }
+
   // Edge hint (RE): the last empty neighbour of an edge group, either side's.
   if (rules.edgeCapture && (ph == Phase::Play || ph == Phase::Opening)) {
     const Board plain = game.boardWithoutHeld();

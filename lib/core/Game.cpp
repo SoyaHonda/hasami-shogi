@@ -403,6 +403,10 @@ bool Game::machineCanEnter(int pieceId, int r, int c) {
   if (phase_ == Phase::Opening && openingDone_[MACHINE]) return false;  // one move in the opening
   const Board b = boardWithoutHeld();
   if (!b.inside(r, c) || b.at(r, c) != EMPTY || machineBlocked(r, c)) return false;
+  // RW: the piece may come to rest on any square it enters (a human piece can stop the drag
+  // there), so it does not enter one where it would complete a wall (user decision 2026-11-07).
+  const PieceView* p = byId(pieceId);
+  if (p && makesWall(b, rules_, MACHINE, p->r, p->c, r, c)) return false;
   if (reservedBy_ >= 0) return reservedBy_ == pieceId && reservedR_ == r && reservedC_ == c;
   reservedR_ = r;
   reservedC_ = c;

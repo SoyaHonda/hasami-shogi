@@ -7,6 +7,7 @@
   --amber:#d8332a; --red:#c99700; --cyan:#7a45d1; --blue:#1f6fe0; --ok:#2a8f53;
   --btn:#1b231f; --btn-ink:#f7f8f5;
   --white-led:#7d8a83;
+  --ru-warn:#1f9d4c; --ru-vuln:#0a94b0;
   --font-koma:"Shippori Mincho B1","Hiragino Mincho ProN","Yu Mincho",serif;
   --font-ui:"IBM Plex Sans JP","Hiragino Sans","Yu Gothic",system-ui,sans-serif;
   --font-num:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
@@ -20,6 +21,7 @@
     --amber:#ff5a46; --red:#ffd23f; --cyan:#b48cff; --blue:#5aa2ff; --ok:#4cc27c;
     --btn:#e3eae5; --btn-ink:#111513;
     --white-led:#ffffff;
+    --ru-warn:#4fd27e; --ru-vuln:#2fd5ea;
     color-scheme:dark;
   }
 }
@@ -31,6 +33,7 @@
   --amber:#ff5a46; --red:#ffd23f; --cyan:#b48cff; --blue:#5aa2ff; --ok:#4cc27c;
   --btn:#e3eae5; --btn-ink:#111513;
   --white-led:#ffffff;
+  --ru-warn:#4fd27e; --ru-vuln:#2fd5ea;
   color-scheme:dark;
 }
 *{box-sizing:border-box}
@@ -63,6 +66,11 @@ h1{margin:0;font-family:var(--font-koma);font-weight:800;font-size:clamp(24px,4v
 .cell.origin{box-shadow:inset 0 0 0 2px var(--ink);}
 /* 端の取り（RE）のヒント：LedPlan の暗い黄色。 */
 .cell[data-led="hint"]::after{content:"";position:absolute;inset:14%;border-radius:50%;border:2px dashed var(--red);opacity:.9}
+/* 長く動かしていない駒（RU）：駒のあるマスなので、駒の外側に見える枠で描く。警告（LedPlan の緑）は残り10秒で
+   だんだん濃く（--glow は LED の明るさ）、取られやすい駒（水色）は濃い枠と地の色で、点滅しない。 */
+.cell[data-led="ruwarn"]::after,.cell[data-led="ruvuln"]::after{content:"";position:absolute;inset:2px;border-radius:5px;border:3px solid var(--led);pointer-events:none}
+.cell[data-led="ruwarn"]::after{opacity:calc(.15 + .85*var(--glow,1))}
+.cell[data-led="ruvuln"]::after{background:color-mix(in srgb,var(--led) 24%,transparent)}
 @keyframes pulse{from{opacity:.45}to{opacity:.95}}
 
 .layer{position:absolute;inset:0;pointer-events:none}
@@ -121,6 +129,7 @@ button{font:inherit;cursor:pointer}
 .row label{font-size:13px}
 .row output{font-family:var(--font-num);font-size:13px;font-variant-numeric:tabular-nums}
 .row input[type=range]{grid-column:1/-1;width:100%;accent-color:var(--cyan)}
+.row input[type=range]:disabled{opacity:.4}
 .row .hint{grid-column:1/-1;font-size:12px;color:var(--muted);line-height:1.5}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
 .seg button{background:transparent;border:0;padding:6px 12px;color:var(--ink)}

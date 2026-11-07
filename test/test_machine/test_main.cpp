@@ -877,6 +877,185 @@ void test_led_wall_square_is_not_a_destination() {
   }
 }
 
+// RW (user decision 2026-11-07): M(0,6) is sent to (5,6), a legal destination, but its way
+// crosses (3,6), where it would complete row 3's wall. The human puts a piece on (4,6) during the
+// job. Under RW the drag stops before (3,6), never resting there; under R0 it stops short of the
+// human piece on (3,6).
+void test_rw_drag_stops_before_a_wall_square() {
+  for (int wall = 0; wall < 2; wall++) {
+    Rules rules;
+    rules.wallLimit = wall == 1;
+    Game g(rules);
+    startPlay(g);  // Opening under RW
+    Params p;
+    VirtualGantry vg(p, 0.0f, 3.0f);
+    MachineController mc(g, vg, p);
+    // The opening moves under RW (plain moves under R0).
+    TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 0, 3000));
+    TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 0, 3100));
+    teleport(g, mId(0), 3, 0);
+    g.onMachineArrive(mId(0), 3200);
+    TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+    for (int c = 1; c < 6; c++) teleport(g, mId(c), 3, c);
+    uint32_t now = 3300;
+    step(g, mc, now);
+    mc.takeSnapshot(now);
+    mc.onThinkResult(move(mId(6), 5, 6), now);
+    TEST_ASSERT_TRUE(mc.job().active);
+    while (mc.job().active && now < 20000) {
+      now++;
+      step(g, mc, now);
+      if (now == 4700) TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 6, now));
+      if (now == 4800) TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(4, 6, now));
+    }
+    TEST_ASSERT_FALSE(mc.job().active);
+    TEST_ASSERT_EQUAL_INT(wall ? 2 : 3, piece(g, mId(6)).r);
+    TEST_ASSERT_EQUAL_INT(6, piece(g, mId(6)).c);
+    TEST_ASSERT_EQUAL_INT(wall ? EMPTY : MACHINE, g.boardWithoutHeld().at(3, 6));
+    TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  }
+}
+
+// RU (plan 2026-11-06 3.1): a piece of either side not moved for a while lights its square. In
+// the last LED_RU_WARN_MS before RU makes it takable by one adjacent enemy piece: green, from
+// LED_RU_WARN_MIN rising to full; from then on: steady cyan (LED_RU_VULNERABLE). Shown while the
+// game is on (its clock frozen while paused), not once it is over; a held piece's origin stays
+// dark; a move resets it, a cancel does not.
+void test_led_untouched_warning_and_vulnerable() {
+  Rules rules;
+  rules.untouchedMs = 20000;
+  rules.timeLimitMs = 40000;
+  Game g(rules);
+  startPlay(g);  // clock 0 at caller time 3000; every piece last moved at 0
+  uint32_t base = 3000;  // caller time minus game clock
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  Rgb out[49];
+  const int hSq = 6 * 7 + 2, mSq = 0 * 7 + 4;
+  g.tick(base + 9999);  // 10001 ms to go: not yet
+  ledPlan(g, mc, base + 9999, out);
+  for (int i = 0; i < 49; i++) ASSERT_RGB(LED_OFF, out[i]);
+  g.tick(base + 10000);  // 10 s to go: the dimmest warning, on every piece of both sides
+  ledPlan(g, mc, base + 10000, out);
+  const Board b0 = g.boardWithoutHeld();
+  for (int i = 0; i < 49; i++) ASSERT_RGB(b0.cells[i] != EMPTY ? (Rgb{0, LED_RU_WARN_MIN, 0}) : LED_OFF, out[i]);
+  ASSERT_RGB((Rgb{0, 32, 0}), out[hSq]);
+  // Brighter as the time runs out.
+  uint8_t prev = out[mSq].g;
+  for (uint32_t clock = 10250; clock < 20000; clock += 250) {
+    g.tick(base + clock);
+    ledPlan(g, mc, base + clock, out);
+    TEST_ASSERT_TRUE(out[mSq].g > prev);
+    prev = out[mSq].g;
+    ASSERT_RGB((Rgb{0, prev, 0}), out[mSq]);
+    ASSERT_RGB(out[mSq], out[hSq]);
+    if (clock == 15000) ASSERT_RGB((Rgb{0, 143, 0}), out[hSq]);  // 5 s to go
+  }
+  g.tick(base + 19999);  // 1 ms to go
+  ledPlan(g, mc, base + 19999, out);
+  ASSERT_RGB((Rgb{0, 254, 0}), out[hSq]);
+  ASSERT_RGB((Rgb{0, 254, 0}), out[mSq]);
+  g.tick(base + 20000);  // takable now: steady cyan
+  for (uint32_t t = 0; t < 1000; t += 125) {
+    ledPlan(g, mc, base + 20000 + t, out);
+    for (int i = 0; i < 49; i++) ASSERT_RGB(b0.cells[i] != EMPTY ? LED_RU_VULNERABLE : LED_OFF, out[i]);
+  }
+  // A move resets the piece: cooldown red first, the warning again 10 s before it is stale.
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 2, base + 20000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 2, base + 20000));
+  ledPlan(g, mc, base + 20000, out);
+  ASSERT_RGB(LED_RED, out[5 * 7 + 2]);
+  ASSERT_RGB(LED_RU_VULNERABLE, out[6 * 7 + 3]);
+  g.tick(base + 29999);
+  ledPlan(g, mc, base + 29999, out);
+  ASSERT_RGB(LED_OFF, out[5 * 7 + 2]);
+  g.tick(base + 30000);
+  ledPlan(g, mc, base + 30000, out);
+  ASSERT_RGB((Rgb{0, 32, 0}), out[5 * 7 + 2]);
+  // A held piece is off the board: its origin is dark. Put back, it is as stale as before.
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 3, base + 30000));
+  ledPlan(g, mc, base + 30000, out);
+  ASSERT_RGB(LED_OFF, out[6 * 7 + 3]);
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Cancelled, (int)g.onHumanPlace(6, 3, base + 30100));
+  ledPlan(g, mc, base + 30100, out);
+  ASSERT_RGB(LED_RU_VULNERABLE, out[6 * 7 + 3]);
+  // Paused: the clock is frozen and so are the colours.
+  g.togglePause(base + 30200);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Paused, (int)g.phase());
+  ledPlan(g, mc, base + 35000, out);
+  ASSERT_RGB(LED_RU_VULNERABLE, out[6 * 7 + 3]);
+  ASSERT_RGB(LED_RU_VULNERABLE, out[mSq]);
+  g.togglePause(base + 35000);  // 1 s resume countdown
+  g.tick(base + 36000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
+  TEST_ASSERT_EQUAL_UINT32(30200, g.clockMs());
+  base += 5800;
+  // Over (the time limit): nothing.
+  g.tick(base + 40000);
+  TEST_ASSERT_EQUAL_INT((int)Phase::Over, (int)g.phase());
+  ledPlan(g, mc, base + 40000, out);
+  for (int i = 0; i < 49; i++) ASSERT_RGB(LED_OFF, out[i]);
+  // Without RU: nothing at any age.
+  Game r0;
+  startPlay(r0);
+  MachineController mc0(r0, vg, p);
+  r0.tick(3000 + 300000);
+  ledPlan(r0, mc0, 3000 + 300000, out);
+  for (int i = 0; i < 49; i++) ASSERT_RGB(LED_OFF, out[i]);
+}
+
+// RU colours among the others: the violation blink wins over them, they win over the cooldown red
+// (a long cooldown meets the warning here), and a machine piece being dragged (holding the
+// reservation; off the board for the human's captures) is dark. Not shown before the game.
+void test_led_untouched_priority() {
+  Params p;
+  Rgb out[49];
+  {
+    Rules rules;
+    rules.untouchedMs = 5000;  // inside the warning window from the start
+    Game g(rules);
+    VirtualGantry vg(p, 0.0f, 3.0f);
+    MachineController mc(g, vg, p);
+    ledPlan(g, mc, 0, out);
+    for (int i = 0; i < 49; i++) ASSERT_RGB(LED_OFF, out[i]);  // Ready
+    startPlay(g);
+    ledPlan(g, mc, 3000, out);
+    ASSERT_RGB((Rgb{0, 143, 0}), out[6 * 7 + 0]);  // 5 s to go
+  }
+  Rules rules;
+  rules.untouchedMs = 20000;
+  rules.humanCooldownMs = 30000;
+  Game g(rules);
+  startPlay(g);
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  // H (6,2) -> (5,2) at clock 0: cooldown until 30000, stale at 20000.
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 2, 3000));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(5, 2, 3000));
+  g.tick(3000 + 10000);
+  ledPlan(g, mc, 3000 + 10000, out);
+  ASSERT_RGB((Rgb{0, 32, 0}), out[5 * 7 + 2]);  // over the cooldown red (170,0,0)
+  g.reportViolation(5, 2, 13000);
+  ledPlan(g, mc, 13000, out);
+  ASSERT_RGB(LED_RED, out[5 * 7 + 2]);
+  ledPlan(g, mc, 13100, out);
+  ASSERT_RGB(LED_OFF, out[5 * 7 + 2]);  // the dark half hides it too
+  g.tick(3000 + 20000);
+  ledPlan(g, mc, 3000 + 20000, out);
+  ASSERT_RGB(LED_RU_VULNERABLE, out[5 * 7 + 2]);
+  ASSERT_RGB(LED_RU_VULNERABLE, out[0 * 7 + 3]);
+  // M(0,3) starts its drag into (1,3): dark while it holds the reservation, fresh once there.
+  TEST_ASSERT_TRUE(g.machineCanEnter(mId(3), 1, 3));
+  ledPlan(g, mc, 3000 + 20000, out);
+  ASSERT_RGB(LED_OFF, out[0 * 7 + 3]);
+  ASSERT_RGB(LED_RU_VULNERABLE, out[0 * 7 + 2]);
+  g.onMachineStep(mId(3), 1, 3);
+  ledPlan(g, mc, 3000 + 20000, out);
+  ASSERT_RGB(LED_OFF, out[0 * 7 + 3]);
+  ASSERT_RGB(LED_OFF, out[1 * 7 + 3]);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_controller_copy_rebinds);
@@ -905,5 +1084,8 @@ int main(int, char**) {
   RUN_TEST(test_led_mismatch_colors);
   RUN_TEST(test_led_edge_hint);
   RUN_TEST(test_led_wall_square_is_not_a_destination);
+  RUN_TEST(test_rw_drag_stops_before_a_wall_square);
+  RUN_TEST(test_led_untouched_warning_and_vulnerable);
+  RUN_TEST(test_led_untouched_priority);
   return UNITY_END();
 }

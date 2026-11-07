@@ -266,6 +266,29 @@ void test_makes_wall() {
   TEST_ASSERT_TRUE(makesWall(b, rw, HUMAN, -1, -1, 6, 6));
 }
 
+// RW (user decision 2026-11-07): a square on the way of a straight drag, the destination
+// included, where the piece coming to rest would complete a wall.
+void test_wall_on_path() {
+  Board b = makeBoard(
+      "..M....\n"
+      ".......\n"
+      ".......\n"
+      "MM.MMMM\n"
+      ".......\n"
+      "..M....\n"
+      "H.....H");
+  TEST_ASSERT_FALSE(wallOnPath(b, MACHINE, 0, 2, 1, 2));
+  TEST_ASSERT_FALSE(wallOnPath(b, MACHINE, 0, 2, 2, 2));  // stops before row 3
+  TEST_ASSERT_TRUE(wallOnPath(b, MACHINE, 0, 2, 3, 2));   // the destination itself
+  TEST_ASSERT_TRUE(wallOnPath(b, MACHINE, 0, 2, 4, 2));   // through (3,2)
+  TEST_ASSERT_TRUE(wallOnPath(b, MACHINE, 5, 2, 1, 2));   // through (3,2) from below
+  TEST_ASSERT_FALSE(wallOnPath(b, MACHINE, 5, 2, 4, 2));
+  // A piece of the row sliding along it leaves its own square empty.
+  TEST_ASSERT_FALSE(wallOnPath(b, MACHINE, 3, 1, 3, 2));
+  // Row 3 is not the human's.
+  TEST_ASSERT_FALSE(wallOnPath(b, HUMAN, 0, 2, 4, 2));
+}
+
 // RE in the game, the human capturing: the scene of the corner.
 void test_game_re_human_captures_corner() {
   Rules rules = withEdge();
@@ -393,6 +416,7 @@ int main(int, char**) {
   RUN_TEST(test_re_and_custodian_without_duplicates);
   RUN_TEST(test_edge_group_geometry);
   RUN_TEST(test_makes_wall);
+  RUN_TEST(test_wall_on_path);
   RUN_TEST(test_game_re_human_captures_corner);
   RUN_TEST(test_game_re_entering_by_cancel_is_not_captured);
   RUN_TEST(test_game_re_held_origin_is_empty);

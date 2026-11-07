@@ -621,6 +621,49 @@ void test_wall_limit_move_is_no_candidate() {
   }
 }
 
+// RW (user decision 2026-11-07): nor a move whose drag passes a square where the piece, coming
+// to rest there, would complete a wall: the controller stops the drag before such a square
+// (Game::machineCanEnter), so the move could not reach its destination.
+void test_wall_limit_path_through_a_wall_square_is_no_candidate() {
+  Snapshot s = makeSnap(
+      "..M....\n"
+      ".......\n"
+      ".......\n"
+      "MM.MMMM\n"
+      ".......\n"
+      ".......\n"
+      "H.....H",
+      0.0f, 2.0f);
+  for (int wall = 0; wall < 2; wall++) {
+    s.wallLimit = wall == 1;
+    static AiCandidate cand[AI_MAX_CANDIDATES];
+    const int k = thinkCandidates(s, Params(), cand, AI_MAX_CANDIDATES);
+    bool down[7] = {};  // destinations (r,2) of the piece on (0,2)
+    bool along = false;
+    for (int i = 0; i < k; i++) {
+      if (cand[i].none) continue;
+      const PieceView& p = pieceById(s, cand[i].pieceId);
+      if (p.r == 0 && p.c == 2 && cand[i].toC == 2) down[cand[i].toR] = true;
+      if (p.r == 3 && p.c == 1 && cand[i].toR == 3 && cand[i].toC == 2) along = true;
+    }
+    TEST_ASSERT_TRUE(down[1]);
+    TEST_ASSERT_TRUE(down[2]);
+    for (int r = 3; r < 7; r++) TEST_ASSERT_EQUAL_INT(wall == 0, (int)down[r]);
+    TEST_ASSERT_TRUE(along);  // sliding along row 3 into its gap leaves a gap behind
+    // Forced forward, the read still never picks such a move.
+    for (int level = 0; level < 3; level++) {
+      Params p;
+      p.level = static_cast<Level>(level);
+      p.advanceWeight = 240.0f;
+      const AiMove m = think(s, p);
+      if (wall == 1 && !m.none) {
+        const PieceView& q = pieceById(s, m.pieceId);
+        TEST_ASSERT_FALSE(q.r == 0 && q.c == 2 && m.toR >= 3);
+      }
+    }
+  }
+}
+
 // Opening (mustMove): "stay" is no candidate; the read makes one move.
 void test_opening_read_makes_a_move() {
   Rules rules;
@@ -749,6 +792,7 @@ int main(int, char**) {
   RUN_TEST(test_snapshot_fields);
   RUN_TEST(test_golden_cases);
   RUN_TEST(test_wall_limit_move_is_no_candidate);
+  RUN_TEST(test_wall_limit_path_through_a_wall_square_is_no_candidate);
   RUN_TEST(test_opening_read_makes_a_move);
   RUN_TEST(test_re_read_takes_an_enclosed_corner);
   RUN_TEST(test_ai_case_rules_field);

@@ -200,6 +200,57 @@ test('rule candidates: RW opens with one move each, then Play', () => {
   assert.throws(() => new m.SimDriver({ edge: true }, {}, 1), /edge/);
 });
 
+// Advances in steps of at most 100 ms until the game clock reads `clock` (fails outside Play).
+function advanceTo(sim, clock) {
+  for (let i = 0; i < 100000 && sim.clockMs() < clock; i++) {
+    assert.equal(sim.phase(), m.Phase.Play, `phase at clock ${sim.clockMs()}`);
+    sim.advance(Math.min(100, clock - sim.clockMs()));
+  }
+  assert.equal(sim.clockMs(), clock);
+}
+
+// RU (plan 2026-11-06 3.1) as the web's slider sets it: setRules({ untouchedMs }) (20-90 s), in
+// force from the next game like the other rules. Pieces of both sides not moved for a while light
+// up: green rising over the last 10 s (LedPlan's LED_RU_WARN), then steady cyan
+// (LED_RU_VULNERABLE) once one adjacent enemy piece would take them.
+test('RU duration from setRules: warning and vulnerable LEDs on stale pieces of both sides', () => {
+  const GREEN = (v) => v << 8;
+  const CYAN = 0x00ffff;
+  const pieceSquares = (s) => s.cells.flatMap((v, i) => (v !== 0 ? [i] : []));
+  withSim([{}, {}, 1], (sim) => {
+    startPlay(sim); // R0
+    sim.setRules({ untouchedMs: 20000 });
+    advanceTo(sim, 25000);
+    assert.ok(sim.state().leds.every((v) => v === 0), 'RU applies from the next game');
+    sim.reset();
+    startPlay(sim);
+    advanceTo(sim, 9999);
+    let s = sim.state();
+    assert.ok(pieceSquares(s).every((i) => s.leds[i] === 0));
+    advanceTo(sim, 10000);
+    s = sim.state();
+    assert.equal(pieceSquares(s).length, 14);
+    for (const i of pieceSquares(s)) assert.equal(s.leds[i], GREEN(32), `square ${i} at 10 s to go`);
+    advanceTo(sim, 15000);
+    s = sim.state();
+    for (const i of pieceSquares(s)) assert.equal(s.leds[i], GREEN(143), `square ${i} at 5 s to go`);
+    advanceTo(sim, 20000);
+    s = sim.state();
+    assert.equal(pieceSquares(s).length, 14);
+    for (const i of pieceSquares(s)) assert.equal(s.leds[i], CYAN, `square ${i} stale`);
+  });
+  // The slider's upper end.
+  withSim([{ untouchedMs: 90000 }, {}, 2], (sim) => {
+    startPlay(sim);
+    advanceTo(sim, 79999);
+    let s = sim.state();
+    assert.ok(pieceSquares(s).every((i) => s.leds[i] === 0));
+    advanceTo(sim, 80000);
+    s = sim.state();
+    for (const i of pieceSquares(s)) assert.equal(s.leds[i], GREEN(32), `square ${i} at 10 s to go`);
+  });
+});
+
 test('B1 settings, the advance weight and the activity measures in state() (plan 2026-11-06 3.3, 3.5)', () => {
   withSim([{ edgeCapture: true, wallLimit: true }, { level: 'hard', advanceWeight: 120 }, 3], (sim) => {
     sim.enableBot({ style: 'race', reactMs: 1000, thinkMaxMs: 3000, threatMiss: 0.3 });

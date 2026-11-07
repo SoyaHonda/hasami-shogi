@@ -47,3 +47,9 @@ int captures(const Board& b, const Rules& rules, int8_t side, int r, int c, int 
 bool completesWall(const Board& b, int8_t side, int fr, int fc, int tr, int tc);
 // RW: completesWall when rules.wallLimit is on, otherwise false. Such a move is illegal.
 bool makesWall(const Board& b, const Rules& rules, int8_t side, int fr, int fc, int tr, int tc);
+// Whether some square of the straight way from (fr,fc) to (tr,tc), the destination included, is
+// one where `side`'s piece from (fr,fc), coming to rest there, would complete a wall
+// (completesWall). Under RW a machine piece never rests on such a square, not even stopped short
+// (Game::machineCanEnter refuses it, so the drag stops one square before it), and the read does
+// not choose such a move (user decision 2026-11-07). Only a move across rows can have one.
+bool wallOnPath(const Board& b, int8_t side, int fr, int fc, int tr, int tc);
