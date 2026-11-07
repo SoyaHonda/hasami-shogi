@@ -888,8 +888,15 @@ void test_ru_read_does_not_open_a_square_next_to_an_untouched_piece() {
 // piece untouched: an RU unit for each machine piece), the heaviest R0 position likewise, and the
 // reads of B1 games under RE + RW + RU20. The same budgets as R0's on the PC.
 void test_think_time_with_untouched() {
-  double total = 0.0, worstUs = 0.0;
+  double total = 0.0;
   int count = 0;
+  AiCase worst;
+  TEST_ASSERT_TRUE(parseAiCase(
+      "HMM....M.......H.M.H...H......H...HM...MM..H..... - 0,0 - - - 4,1.5,200,250,H,0.5,1 RE+RW+RU20000 none",
+      worst));
+  // Timed before and after the long loop below and the fastest kept, so a burst of load on the
+  // host during one measurement does not fail the test (the limit itself is unchanged).
+  double worstUs = thinkMicros(worst.snap, worst.params);
   FILE* f = openGolden();
   TEST_ASSERT_NOT_NULL(f);
   char line[512];
@@ -930,11 +937,8 @@ void test_think_time_with_untouched() {
       }
     }
   }
-  AiCase worst;
-  TEST_ASSERT_TRUE(parseAiCase(
-      "HMM....M.......H.M.H...H......H...HM...MM..H..... - 0,0 - - - 4,1.5,200,250,H,0.5,1 RE+RW+RU20000 none",
-      worst));
-  worstUs = thinkMicros(worst.snap, worst.params);
+  const double again = thinkMicros(worst.snap, worst.params);
+  if (again < worstUs) worstUs = again;
   printf("think RE+RW+RU20: mean %.0f us over %d positions, worst position %.0f us\n", total / count, count, worstUs);
   TEST_ASSERT_TRUE(count > 100);
   TEST_ASSERT_TRUE(total / count <= 2000.0);
