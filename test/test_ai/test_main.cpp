@@ -6,6 +6,7 @@
 #include "Board.h"
 #include "Game.h"
 #include "RaceTime.h"
+#include "SimDriver.h"
 #include <chrono>
 
 // Build a snapshot from rows separated by '\n': '.' empty, 'H' human, 'M' machine,
@@ -774,6 +775,172 @@ void test_think_time_with_rules() {
   TEST_ASSERT_TRUE(worstUs <= 10000.0);
 }
 
+// ---- RU (plan 2026-11-06 3.1): the read's RU threats (RaceTime's RU read) ----
+
+// RU with untouchedMs 20000 at clock 50000: every piece moved at the snapshot unless set with
+// untouchedIn.
+static Snapshot ruSnap(const char* rows, float headR, float headC) {
+  Snapshot s = makeSnap(rows, headR, headC);
+  s.clockMs = 50000;
+  s.untouchedMs = 20000;
+  for (int i = 0; i < s.count; i++) {
+    s.pieces[i].movedAt = s.clockMs;
+    s.pieces[i].liftedAt = s.clockMs;
+  }
+  return s;
+}
+
+static PieceView& pieceOn(Snapshot& s, int r, int c) {
+  for (int i = 0; i < s.count; i++)
+    if (s.pieces[i].r == r && s.pieces[i].c == c) return s.pieces[i];
+  TEST_FAIL_MESSAGE("no piece there");
+  return s.pieces[0];
+}
+
+// The piece on (r,c) goes untouched ms after the snapshot (0: it is untouched already).
+static void untouchedIn(Snapshot& s, int r, int c, uint32_t ms) {
+  pieceOn(s, r, c).movedAt = s.clockMs + ms - s.untouchedMs;
+}
+
+// M(0,2) goes untouched in 600 ms and every human piece reaches (1,2) in one move: RU takes it at
+// 600, before a guard could start at the next read. The read refreshes it at once (sliding into
+// the gap at normal and hard); untouched later (3000 ms), it still refreshes it while that safe
+// move is there rather than at the last moment. Without RU, or with the piece fresh, it stays.
+void test_ru_read_refreshes_a_piece_going_untouched() {
+  Snapshot s = ruSnap(
+      "MMM.MMM\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "HHHHHHH",
+      0.0f, 2.0f);
+  const uint32_t soon[2] = {600, 3000};
+  for (uint32_t in : soon) {
+    untouchedIn(s, 0, 2, in);
+    for (int level = 0; level < 3; level++) {
+      Params p;
+      p.level = static_cast<Level>(level);
+      const AiMove m = think(s, p);
+      TEST_ASSERT_FALSE(m.none);
+      TEST_ASSERT_EQUAL_INT(0, pieceById(s, m.pieceId).r);
+      TEST_ASSERT_EQUAL_INT(2, pieceById(s, m.pieceId).c);
+      if (level > 0) {
+        TEST_ASSERT_EQUAL_INT(0, m.toR);
+        TEST_ASSERT_EQUAL_INT(3, m.toC);
+      }
+    }
+  }
+  untouchedIn(s, 0, 2, 20000);
+  TEST_ASSERT_TRUE(think(s, Params()).none);
+  untouchedIn(s, 0, 2, 600);
+  s.untouchedMs = 0;
+  TEST_ASSERT_TRUE(think(s, Params()).none);
+}
+
+// M(0,0) is untouched, enclosed by M(0,1) and M(1,0). Forced forward (advance weight 240), the
+// read would take M(0,1) down its file, which opens (0,1) to H(0,6) along row 0: RU takes M(0,0)
+// at 500. It moves another piece instead (normal and hard; Easy reads only a held piece). With
+// M(0,0) fresh it takes M(0,1) down.
+void test_ru_read_does_not_open_a_square_next_to_an_untouched_piece() {
+  Snapshot s = ruSnap(
+      "MM....H\n"
+      "M......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "H......",
+      0.0f, 1.0f);
+  for (int level = 1; level < 3; level++) {
+    Params p;
+    p.level = static_cast<Level>(level);
+    p.advanceWeight = 240.0f;
+    untouchedIn(s, 0, 0, 0);
+    AiMove m = think(s, p);
+    TEST_ASSERT_FALSE(m.none);
+    const PieceView& q = pieceById(s, m.pieceId);
+    TEST_ASSERT_FALSE(q.r == 0 && q.c == 1);
+    // Whatever moved, no human piece reaches a square next to M(0,0) in one move afterwards.
+    Board b = s.board;
+    b.set(q.r, q.c, EMPTY);
+    b.set(m.toR, m.toC, MACHINE);
+    for (int d = 0; d < 4; d++) {
+      const int rr = DIR_R[d], cc = DIR_C[d];
+      if (!b.inside(rr, cc) || b.at(rr, cc) != EMPTY) continue;
+      for (int i = 0; i < s.count; i++) {
+        if (s.pieces[i].side != HUMAN) continue;
+        int dd[MAX_N * MAX_N];
+        const int k = dests(b, s.pieces[i].r, s.pieces[i].c, dd);
+        for (int j = 0; j < k; j++) TEST_ASSERT_NOT_EQUAL(rr * 7 + cc, dd[j]);
+      }
+    }
+    untouchedIn(s, 0, 0, 20000);
+    m = think(s, p);
+    TEST_ASSERT_FALSE(m.none);
+    TEST_ASSERT_EQUAL_INT(0, pieceById(s, m.pieceId).r);
+    TEST_ASSERT_EQUAL_INT(1, pieceById(s, m.pieceId).c);
+  }
+}
+
+// think() time under RE + RW + RU (plan 2026-11-06 3.1): the golden table with RU20000 (every
+// piece untouched: an RU unit for each machine piece), the heaviest R0 position likewise, and the
+// reads of B1 games under RE + RW + RU20. The same budgets as R0's on the PC.
+void test_think_time_with_untouched() {
+  double total = 0.0, worstUs = 0.0;
+  int count = 0;
+  FILE* f = openGolden();
+  TEST_ASSERT_NOT_NULL(f);
+  char line[512];
+  while (std::fgets(line, sizeof(line), f)) {
+    AiCase c;
+    if (isAiCaseSkippable(line) || !parseAiCase(line, c)) continue;
+    c.snap.edgeCapture = true;
+    c.snap.wallLimit = true;
+    c.snap.untouchedMs = 20000;
+    total += thinkMicros(c.snap, c.params);
+    count++;
+  }
+  std::fclose(f);
+  Rules rules;
+  rules.edgeCapture = rules.wallLimit = true;
+  rules.untouchedMs = 20000;
+  BotParams b1;
+  b1.style = BotStyle::Race;
+  b1.reactMs = 1000;
+  b1.thinkMaxMs = 3000;
+  b1.threatMiss = 0.3f;
+  for (uint32_t seed = 1; seed <= 2; seed++) {
+    for (int level = 1; level < 3; level++) {
+      Params p;
+      p.level = static_cast<Level>(level);
+      SimDriver d(rules, p, seed);
+      d.enableBot(b1);
+      d.start();
+      uint32_t next = 0;
+      for (uint32_t t = 0; t < 600000 && d.state().phase != Phase::Over; t += 10) {
+        d.advance(10);
+        const Game& g = d.game();
+        if (g.phase() != Phase::Play || g.clockMs() < next) continue;
+        next = g.clockMs() + 1000;
+        const State st = d.state();
+        total += thinkMicros(g.snapshot(st.headR, st.headC), p);
+        count++;
+      }
+    }
+  }
+  AiCase worst;
+  TEST_ASSERT_TRUE(parseAiCase(
+      "HMM....M.......H.M.H...H......H...HM...MM..H..... - 0,0 - - - 4,1.5,200,250,H,0.5,1 RE+RW+RU20000 none",
+      worst));
+  worstUs = thinkMicros(worst.snap, worst.params);
+  printf("think RE+RW+RU20: mean %.0f us over %d positions, worst position %.0f us\n", total / count, count, worstUs);
+  TEST_ASSERT_TRUE(count > 100);
+  TEST_ASSERT_TRUE(total / count <= 2000.0);
+  TEST_ASSERT_TRUE(worstUs <= 10000.0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_picks_capture);
@@ -798,5 +965,8 @@ int main(int, char**) {
   RUN_TEST(test_ai_case_rules_field);
   RUN_TEST(test_think_time_with_rules);
   RUN_TEST(test_advance_weight_brings_the_machine_out);
+  RUN_TEST(test_ru_read_refreshes_a_piece_going_untouched);
+  RUN_TEST(test_ru_read_does_not_open_a_square_next_to_an_untouched_piece);
+  RUN_TEST(test_think_time_with_untouched);
   return UNITY_END();
 }

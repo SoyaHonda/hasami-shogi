@@ -212,12 +212,15 @@ function advanceTo(sim, clock) {
 // RU (plan 2026-11-06 3.1) as the web's slider sets it: setRules({ untouchedMs }) (20-90 s), in
 // force from the next game like the other rules. Pieces of both sides not moved for a while light
 // up: green rising over the last 10 s (LedPlan's LED_RU_WARN), then steady cyan
-// (LED_RU_VULNERABLE) once one adjacent enemy piece would take them.
+// (LED_RU_VULNERABLE) once one adjacent enemy piece would take them. The machine does not read
+// here (a read interval, reactMs, longer than the test), so its pieces stay untouched too: under
+// RU the read refreshes its pieces before they go untouched.
 test('RU duration from setRules: warning and vulnerable LEDs on stale pieces of both sides', () => {
   const GREEN = (v) => v << 8;
   const CYAN = 0x00ffff;
   const pieceSquares = (s) => s.cells.flatMap((v, i) => (v !== 0 ? [i] : []));
-  withSim([{}, {}, 1], (sim) => {
+  const noRead = { reactMs: 600000 };
+  withSim([{}, noRead, 1], (sim) => {
     startPlay(sim); // R0
     sim.setRules({ untouchedMs: 20000 });
     advanceTo(sim, 25000);
@@ -240,7 +243,7 @@ test('RU duration from setRules: warning and vulnerable LEDs on stale pieces of 
     for (const i of pieceSquares(s)) assert.equal(s.leds[i], CYAN, `square ${i} stale`);
   });
   // The slider's upper end.
-  withSim([{ untouchedMs: 90000 }, {}, 2], (sim) => {
+  withSim([{ untouchedMs: 90000 }, noRead, 2], (sim) => {
     startPlay(sim);
     advanceTo(sim, 79999);
     let s = sim.state();

@@ -6,6 +6,9 @@
 //   <out> [seed] > test/golden/ai_cases.txt
 //   <out> 20261106 RE+RW >> test/golden/ai_cases.txt
 //   <out> 20261107 RE+RW+OPEN >> test/golden/ai_cases.txt
+//   <out> 20261108 RE+RW+RU20000 >> test/golden/ai_cases.txt
+//     (16 of its 17 quota cases come within a few minutes; the last, a normal-level "stay", did
+//     not turn up, so that run was stopped by hand and exits short of the quotas.)
 // Every candidate's score goes to stderr ("# scores" lines); stdout is the table.
 //
 // With a rules field (lib/core/AiCase.h, plan 2026-11-06 3.1) every line carries it, and a

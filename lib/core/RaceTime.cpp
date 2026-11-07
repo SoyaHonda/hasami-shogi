@@ -356,6 +356,27 @@ bool guardable(const RaceTimes& t, const Guard& g, float th, float lead) {
   return !raceInf(g.save) && g.save + lead + t.margin <= th;
 }
 
+// Whether unit L on b holds the square sq.
+bool unitHas(const Board& b, const RaceLine& L, int sq) {
+  if (raceIsUntouched(L)) return L.r * b.n + L.c == sq;
+  if (raceIsGroup(L)) {
+    EdgeGroup g;
+    return L.len > 0 && edgeGroupAt(b, L.r, L.c, g) && g.cells.has(sq);
+  }
+  for (int k = 0; k < L.len; k++)
+    if ((L.r + L.dr * k) * b.n + (L.c + L.dc * k) == sq) return true;
+  return false;
+}
+
+// Whether guard g, taken for unit `by`, guards unit L (threatened at th) with the same move: one
+// of the two is an RU unit, L holds g's piece and the move starts in time for L. Moving the piece
+// restarts its timer (RU) and takes it out of its lines and group, whose rest saveLine checked.
+bool covers(const RaceState& st, const RaceTimes& t, const Guard& g, const RaceLine& by, const RaceLine& L, float th,
+            float lead) {
+  if (!raceIsUntouched(by) && !raceIsUntouched(L)) return false;
+  return guardable(t, g, th, lead) && unitHas(st.board, L, g.pr * st.board.n + g.pc);
+}
+
 struct Search {
   const RaceState* st;
   const RaceTimes* t;
@@ -366,32 +387,45 @@ struct Search {
   float lead;
   int path[RACE_EXHAUSTIVE];
   Guard guards[RACE_EXHAUSTIVE];
+  uint32_t cover[RACE_EXHAUSTIVE];  // the other units (bit j for idx[j]) each guard also guards
   int best;
   int bestPath[RACE_EXHAUSTIVE];
   Guard bestGuards[RACE_EXHAUSTIVE];
+  uint32_t bestCover[RACE_EXHAUSTIVE];
   int bestLen;
 };
 
-void searchOrders(Search& s, int depth, int pieces, float hf, float hr, float hc) {
+// `used`: the units guarded so far (bit j for idx[j]), by a guard of their own or covered.
+void searchOrders(Search& s, int depth, int pieces, uint32_t used, float hf, float hr, float hc) {
   if (pieces > s.best) {
     s.best = pieces;
     s.bestLen = depth;
     for (int i = 0; i < depth; i++) {
       s.bestPath[i] = s.path[i];
       s.bestGuards[i] = s.guards[i];
+      s.bestCover[i] = s.cover[i];
     }
   }
   if (depth == s.m) return;
   for (int j = 0; j < s.m; j++) {
-    bool used = false;
-    for (int i = 0; i < depth; i++) used = used || s.path[i] == j;
-    if (used) continue;
+    if ((used >> j) & 1u) continue;
     const RaceLineEval& e = s.ev[s.idx[j]];
     const Guard g = saveLine(*s.st, *s.t, *s.et, e.line, hf, hr, hc);
     if (!guardable(*s.t, g, e.th, s.lead)) continue;
+    uint32_t cov = 0;
+    int add = e.line.len;
+    for (int q = 0; q < s.m; q++) {
+      if (q == j || ((used >> q) & 1u)) continue;
+      const RaceLineEval& o = s.ev[s.idx[q]];
+      if (!covers(*s.st, *s.t, g, e.line, o.line, o.th, s.lead)) continue;
+      cov |= 1u << q;
+      add += o.line.len;
+    }
     s.path[depth] = j;
     s.guards[depth] = g;
-    searchOrders(s, depth + 1, pieces + e.line.len, g.arrival, static_cast<float>(g.dr), static_cast<float>(g.dc));
+    s.cover[depth] = cov;
+    searchOrders(s, depth + 1, pieces + add, used | (1u << j) | cov, g.arrival, static_cast<float>(g.dr),
+                 static_cast<float>(g.dc));
   }
 }
 
@@ -423,6 +457,7 @@ RaceTimes raceTimes(const Snapshot& s, const Params& p) {
   t.rules.edgeCapture = s.edgeCapture;
   t.rules.wallLimit = s.wallLimit;
   t.rules.untouchedMs = s.untouchedMs;
+  t.untouched = false;
   return t;
 }
 
@@ -441,6 +476,8 @@ void raceInit(RaceState& st, const Snapshot& s, const RaceTimes& t) {
   std::memset(st.blocked, 0, sizeof(st.blocked));
   std::memset(st.mReady, 0, sizeof(st.mReady));
   std::memset(st.mId, 0, sizeof(st.mId));
+  for (int i = 0; i <= 2 * MAX_N; i++) st.mStale[i] = RACE_INF;
+  const bool ru = raceUntouchedRead(t);
   st.reserved = -1;
   if (st.board.inside(s.reservedR, s.reservedC)) {
     st.reserved = s.reservedR * n + s.reservedC;
@@ -462,10 +499,18 @@ void raceInit(RaceState& st, const Snapshot& s, const RaceTimes& t) {
     const PieceView& q = s.pieces[i];
     if (!q.alive || !st.board.inside(q.r, q.c)) continue;
     const float rem = q.cooldownUntil > s.clockMs ? static_cast<float>(q.cooldownUntil - s.clockMs) : 0.0f;
+    // RU read: when it goes untouched (the clock runs on).
+    float stale = RACE_INF;
+    if (ru) {
+      const uint32_t due = q.movedAt + t.rules.untouchedMs;
+      stale = due > s.clockMs ? static_cast<float>(due - s.clockMs) : 0.0f;
+    }
     if (q.side == MACHINE) {
       if (q.held) continue;
       st.mReady[q.r * n + q.c] = rem;
       st.mId[q.r * n + q.c] = q.id;
+      // The piece being dragged is off the board for the human; its timer restarts square by square.
+      if (q.id > 0 && q.id <= 2 * MAX_N) st.mStale[q.id] = q.id == s.reservedId ? RACE_INF : stale;
       continue;
     }
     if (q.side != HUMAN || st.hCount >= RACE_MAX_HUMANS) continue;
@@ -478,6 +523,7 @@ void raceInit(RaceState& st, const Snapshot& s, const RaceTimes& t) {
     h.pending = false;
     h.ready = rem;
     h.holdLeft = RACE_INF;
+    h.staleAt = stale;
     if (q.held && q.id == pendingId) {
       // Its origin stays closed to the machine until it lands, like any held origin (3.1).
       st.blocked[q.r * n + q.c] = true;
@@ -485,10 +531,12 @@ void raceInit(RaceState& st, const Snapshot& s, const RaceTimes& t) {
       h.r = s.pendingR;
       h.c = s.pendingC;
       h.ready = st.gap + t.humanCooldown;
+      h.staleAt = ru ? st.gap + static_cast<float>(t.rules.untouchedMs) : RACE_INF;
     } else if (q.held) {
       st.blocked[q.r * n + q.c] = true;
       h.held = true;
       h.ready = 0.0f;
+      h.staleAt = RACE_INF;
       if (t.maxHold > 0.0f) {
         const float up = s.clockMs > q.liftedAt ? static_cast<float>(s.clockMs - q.liftedAt) : 0.0f;
         h.holdLeft = t.maxHold - up;
@@ -533,12 +581,25 @@ int raceMoveMachine(RaceState& st, const RaceTimes& t, int fr, int fc, int tr, i
   st.mId[from] = 0;
   st.stale.reset(from);
   st.stale.reset(to);
+  // RU read: the piece's timer restarts at the arrival (at every square it enters, the last one
+  // counts).
+  const bool ru = raceUntouchedRead(t);
+  const int id = st.mId[to];
+  if (id > 0 && id <= 2 * MAX_N) st.mStale[id] = ru ? arrival + static_cast<float>(t.rules.untouchedMs) : RACE_INF;
   // Captures on the real board: the pending target is still empty there.
   Board real = st.board;
   for (int i = 0; i < st.hCount; i++)
     if (st.h[i].alive && st.h[i].pending) real.set(st.h[i].r, st.h[i].c, EMPTY);
+  // RU read: the human pieces untouched by the arrival (otherwise those of the snapshot).
+  RaceMask stale = st.stale;
+  if (ru) {
+    for (int i = 0; i < st.hCount; i++) {
+      const RaceHuman& h = st.h[i];
+      if (h.alive && !h.held && !h.pending && !raceInf(h.staleAt) && h.staleAt <= arrival) stale.set(h.r * n + h.c);
+    }
+  }
   int caps[MAX_N * MAX_N];
-  const int k = captures(real, t.rules, MACHINE, tr, tc, caps, &st.stale);
+  const int k = captures(real, t.rules, MACHINE, tr, tc, caps, &stale);
   for (int i = 0; i < k; i++) {
     st.board.cells[caps[i]] = EMPTY;
     st.stale.reset(caps[i]);
@@ -592,7 +653,19 @@ RaceLine raceGroupThrough(const Board& b, const RaceTimes& t, int8_t side, int r
   return L;
 }
 
+RaceLine raceUntouchedThrough(const RaceState& st, const RaceTimes& t, int r, int c) {
+  RaceLine L{r, c, 0, 0, 0, MACHINE, true};
+  if (!raceUntouchedRead(t) || !st.board.inside(r, c) || st.board.at(r, c) != MACHINE) return L;
+  if (raceMachineStale(st, r * st.board.n + c) < RACE_UNTOUCHED_DANGER_MS) L.len = 1;
+  return L;
+}
+
 int raceUnitSquares(const Board& b, const RaceLine& L, uint8_t out[]) {
+  if (raceIsUntouched(L)) {
+    if (L.len <= 0) return 0;
+    out[0] = static_cast<uint8_t>(L.r * b.n + L.c);
+    return 1;
+  }
   if (!raceIsGroup(L)) {
     for (int k = 0; k < L.len; k++) out[k] = static_cast<uint8_t>((L.r + L.dr * k) * b.n + (L.c + L.dc * k));
     return L.len > 0 ? L.len : 0;
@@ -607,6 +680,14 @@ int raceUnitSquares(const Board& b, const RaceLine& L, uint8_t out[]) {
 
 int raceUnitEnds(const Board& b, const RaceLine& L, uint8_t out[]) {
   int k = 0;
+  if (raceIsUntouched(L)) {
+    if (L.len <= 0) return 0;
+    // Square order: up, left, right, down.
+    const int nr[4] = {L.r - 1, L.r, L.r, L.r + 1}, nc[4] = {L.c, L.c - 1, L.c + 1, L.c};
+    for (int d = 0; d < 4; d++)
+      if (b.inside(nr[d], nc[d]) && b.at(nr[d], nc[d]) == EMPTY) out[k++] = static_cast<uint8_t>(nr[d] * b.n + nc[d]);
+    return k;
+  }
   if (!raceIsGroup(L)) {
     const int ar = L.r - L.dr, ac = L.c - L.dc, br = L.r + L.dr * L.len, bc = L.c + L.dc * L.len;
     if (b.inside(ar, ac)) out[k++] = static_cast<uint8_t>(ar * b.n + ac);
@@ -645,7 +726,42 @@ float raceHumanPlace(const RaceState& st, const RaceTimes& t, int hi, int sq) {
   return e;
 }
 
+float raceUntouchedTime(const RaceState& st, const RaceTimes& t, int r, int c) {
+  if (!raceUntouchedRead(t) || !st.board.inside(r, c) || st.board.at(r, c) != MACHINE) return RACE_INF;
+  const int n = st.board.n;
+  const float stale = raceMachineStale(st, r * n + c);
+  if (raceInf(stale)) return RACE_INF;
+  float best = RACE_INF;
+  for (int d = 0; d < 4; d++) {
+    const int rr = r + DIR_R[d], cc = c + DIR_C[d];
+    if (!st.board.inside(rr, cc)) continue;
+    const int sq = rr * n + cc;
+    const int8_t v = st.board.cells[sq];
+    if (v == EMPTY) {
+      // A placement there (H1); Easy reads only the held piece's.
+      for (int i = 0; i < st.hCount; i++) {
+        if (t.easy && !st.h[i].held) continue;
+        const float e = raceHumanPlace(st, t, i, sq);
+        if (!raceInf(e)) best = fmin2(best, fmax2(e, st.firstPlace));
+      }
+    } else if (v == HUMAN) {
+      const int hi = humanAt(st, rr, cc);
+      if (hi < 0) continue;
+      if (st.h[hi].pending) {
+        // It lands at gap: an arrival next to the piece, a capture once the piece is untouched.
+        if (st.gap >= stale) best = fmin2(best, st.gap);
+      } else if (!t.easy) {
+        // It steps away and a piece comes into its square, or it comes back (H3, H4).
+        best = fmin2(best, stepAwayTime(st, t, hi, 0u));
+      }
+    }
+  }
+  // The human can wait: the arrival comes once the piece is untouched.
+  return raceInf(best) ? RACE_INF : fmax2(stale, best);
+}
+
 float raceHumanTime(const RaceState& st, const RaceTimes& t, const RaceLine& L) {
+  if (raceIsUntouched(L)) return L.len > 0 ? raceUntouchedTime(st, t, L.r, L.c) : RACE_INF;
   if (raceIsGroup(L)) return groupTime(st, t, L);
   const Board& b = st.board;
   const int n = b.n;
@@ -708,6 +824,8 @@ void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int 
       rest = fmin2(rest, raceHumanTime(s2, t, raceLineThrough(b2, MACHINE, nr, nc, ldr, ldc)));
       // RE: the group it is left in (the old square is a new empty neighbour of it).
       if (t.rules.edgeCapture) rest = fmin2(rest, raceHumanTime(s2, t, raceGroupThrough(b2, t, MACHINE, nr, nc)));
+      // RU read: the same for the piece itself.
+      if (raceUntouchedRead(t)) rest = fmin2(rest, raceUntouchedTime(s2, t, nr, nc));
     }
   }
   s2.reactAt = reactAt;
@@ -728,7 +846,9 @@ void raceDestTimes(const RaceState& st, const RaceTimes& t, int pr, int pc, int 
 void racePlanned(const Board& b, const RaceLineEval ev[], int count, RaceMask* out) {
   out->clear();
   for (int i = 0; i < count; i++) {
-    if (!ev[i].danger) continue;
+    // Where the human is heading: the units threatened within RACE_DANGER_MS (lines and groups:
+    // the threatened ones; RU units count from their longer horizon only once that near).
+    if (raceInf(ev[i].th) || !(ev[i].th < RACE_DANGER_MS)) continue;
     uint8_t ends[MAX_N * MAX_N];
     const int k = raceUnitEnds(b, ev[i].line, ends);
     for (int j = 0; j < k; j++) out->set(ends[j]);
@@ -767,6 +887,14 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
       lines[k++] = RaceLine{g.first / n, g.first % n, 0, 0, g.size, MACHINE};
     }
   }
+  if (raceUntouchedRead(t)) {
+    // RU read: the pieces going untouched within RACE_UNTOUCHED_DANGER_MS, after the rest.
+    const int n = st.board.n;
+    for (int sq = 0; sq < n * n && k < RACE_MAX_LINES; sq++) {
+      const RaceLine L = raceUntouchedThrough(st, t, sq / n, sq % n);
+      if (L.len > 0) lines[k++] = L;
+    }
+  }
   int idx[RACE_MAX_LINES];
   int m = 0;
   for (int i = 0; i < k; i++) {
@@ -774,7 +902,8 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
     e.line = lines[i];
     e.th = raceHumanTime(st, t, lines[i]);
     e.save = RACE_INF;
-    e.danger = !raceInf(e.th) && e.th < RACE_DANGER_MS;
+    const float horizon = raceIsUntouched(lines[i]) ? RACE_UNTOUCHED_DANGER_MS : RACE_DANGER_MS;
+    e.danger = !raceInf(e.th) && e.th < horizon;
     e.guarded = false;
     e.order = -1;
     e.guardR = e.guardC = e.toR = e.toC = -1;
@@ -808,13 +937,8 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
   float hfAt[RACE_MAX_LINES], hrAt[RACE_MAX_LINES], hcAt[RACE_MAX_LINES];
   int gR[RACE_MAX_LINES], gC[RACE_MAX_LINES];
   int guards = 0;
-  auto take = [&](int line, const Guard& g, int order) {
-    hfAt[guards] = hf;
-    hrAt[guards] = hr;
-    hcAt[guards] = hc;
-    gR[guards] = g.pr;
-    gC[guards] = g.pc;
-    guards++;
+  // A unit guarded by g in the order (its own guard, or covered by another unit's).
+  auto mark = [&](int line, const Guard& g, int order) {
     RaceLineEval& e = out[line];
     e.guarded = true;
     e.order = order;
@@ -823,6 +947,15 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
     e.guardC = g.pc;
     e.toR = g.dr;
     e.toC = g.dc;
+  };
+  auto take = [&](int line, const Guard& g, int order) {
+    hfAt[guards] = hf;
+    hrAt[guards] = hr;
+    hcAt[guards] = hc;
+    gR[guards] = g.pr;
+    gC[guards] = g.pc;
+    guards++;
+    mark(line, g, order);
     hf = g.arrival;
     hr = static_cast<float>(g.dr);
     hc = static_cast<float>(g.dc);
@@ -840,13 +973,24 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
     s.lead = lead;
     s.best = 0;
     s.bestLen = 0;
-    searchOrders(s, 0, 0, hf, hr, hc);
-    for (int i = 0; i < s.bestLen; i++) take(idx[s.bestPath[i]], s.bestGuards[i], i);
+    searchOrders(s, 0, 0, 0u, hf, hr, hc);
+    for (int i = 0; i < s.bestLen; i++) {
+      take(idx[s.bestPath[i]], s.bestGuards[i], i);
+      for (int q = 0; q < m; q++)
+        if ((s.bestCover[i] >> q) & 1u) mark(idx[q], s.bestGuards[i], i);
+    }
   } else {
     int order = 0;
     for (int j = 0; j < m; j++) {
+      if (out[idx[j]].guarded) continue;  // covered by an earlier guard
       const Guard g = saveLine(st, t, et, out[idx[j]].line, hf, hr, hc);
-      if (guardable(t, g, out[idx[j]].th, lead)) take(idx[j], g, order++);
+      if (!guardable(t, g, out[idx[j]].th, lead)) continue;
+      take(idx[j], g, order);
+      for (int q = 0; q < m; q++) {
+        RaceLineEval& o = out[idx[q]];
+        if (q != j && !o.guarded && covers(st, t, g, out[idx[j]].line, o.line, o.th, lead)) mark(idx[q], g, order);
+      }
+      order++;
     }
   }
   // Lines left unguarded: save with the head after the guards, and their risk (3.7). A guard
@@ -871,6 +1015,11 @@ int raceAssess(const RaceState& st, const RaceTimes& t, RaceLineEval out[], floa
     e.save = g.save;
     if (raceInf(g.save)) {
       e.risk = clamp01((2500.0f - e.th) / 1000.0f);
+      // RU: a unit beyond RACE_DANGER_MS whose piece has no safe move even with the head free now
+      // is left to later reads.
+      if (raceIsUntouched(e.line) && !(e.th < RACE_DANGER_MS) &&
+          raceInf(saveLine(st, t, et, e.line, st.headFree, st.headR, st.headC).save))
+        e.danger = false;
     } else {
       e.risk = clamp01(0.5f + (g.save + lead + t.margin - e.th) / 2000.0f);
     }
@@ -944,6 +1093,14 @@ float raceGain(const RaceState& st, const RaceTimes& t, const RaceLine& L) {
   const float tm = raceMachineTime(st, t, L);
   if (raceInf(tm)) return 0.0f;
   const float esc = raceEscape(st, t, L);
-  if (raceInf(esc)) return static_cast<float>(L.len);
-  return static_cast<float>(L.len) * clamp01(0.5f + (esc - tm) / 2000.0f);
+  float g = raceInf(esc) ? static_cast<float>(L.len) : static_cast<float>(L.len) * clamp01(0.5f + (esc - tm) / 2000.0f);
+  if (raceUntouchedRead(t) && g > 0.0f) {
+    // RU read: an end held by a machine piece the human takes by RU before T_m (+ margin).
+    const int ends[2][2] = {{L.r - L.dr, L.c - L.dc}, {L.r + L.dr * L.len, L.c + L.dc * L.len}};
+    for (const auto& e : ends) {
+      const float tu = raceUntouchedTime(st, t, e[0], e[1]);
+      if (!raceInf(tu) && tu < tm + t.margin) g *= 1.0f - clamp01(0.5f + (tm + t.margin - tu) / 2000.0f);
+    }
+  }
+  return g;
 }

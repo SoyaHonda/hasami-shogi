@@ -36,8 +36,11 @@ struct Snapshot {
   // placement lands no earlier than lastPlaceAt + humanIntervalMs.
   bool hasLastPlace = false;
   uint32_t lastPlaceAt = 0;
-  // Square the machine has reserved for a piece being dragged, or -1,-1 (humans cannot go there).
+  // Square the machine has reserved for a piece being dragged, or -1,-1 (humans cannot go there),
+  // and the id of that piece (-1 for none): it is off the board for the human's captures, so RU
+  // does not take it (its timer restarts at every square it enters).
   int reservedR = -1, reservedC = -1;
+  int reservedId = -1;
   // Rule times the read needs (copied from Rules by Game::snapshot; defaults match Rules).
   uint32_t humanCooldownMs = 3000, machineCooldownMs = 1000, humanIntervalMs = 1000, maxHoldMs = 1000;
   // Rule candidates of plan 2026-11-06 3.1 (copied from Rules by Game::snapshot; off = R0): RE,
@@ -56,7 +59,9 @@ struct AiMove {
 };
 
 // A machine line (a run of machine pieces, plan 2026-10-31 3.4) starting at (r,c) in direction
-// (dr,dc) and how likely the read thinks the human captures it.
+// (dr,dc) and how likely the read thinks the human captures it. Units of the rule candidates
+// follow the lines with dr = dc = 0: RE's edge groups (from (r,c), the group's first square) and,
+// under RU, single pieces about to go untouched (len 1; RaceTime's RU units).
 struct AiLineRisk {
   int r, c, dr, dc, len;
   float risk;  // 0..1

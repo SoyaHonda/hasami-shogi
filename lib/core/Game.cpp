@@ -617,6 +617,7 @@ Snapshot Game::snapshot(float headR, float headC) const {
   s.lastPlaceAt = lastPlaceClock_;
   s.reservedR = reservedBy_ >= 0 ? reservedR_ : -1;
   s.reservedC = reservedBy_ >= 0 ? reservedC_ : -1;
+  s.reservedId = reservedBy_;
   s.humanCooldownMs = rules_.humanCooldownMs;
   s.machineCooldownMs = rules_.machineCooldownMs;
   s.humanIntervalMs = rules_.humanIntervalMs;

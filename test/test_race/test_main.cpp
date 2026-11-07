@@ -703,6 +703,345 @@ void test_re_corner_is_no_safe_destination() {
   }
 }
 
+// ---- RU (plan 2026-11-06 3.1): the time the human needs to take an untouched machine piece ----
+// The read of think() sets RaceTimes::untouched; raceTimes() leaves it off (the human bots, the
+// activity measure and the search exploiter read as before). These tests use untouchedMs = 5000
+// so that the movedAt values fit the clock of makeSnap.
+
+static const uint32_t RU_MS = 5000;
+
+static RaceTimes ruTimes(const Snapshot& s, Params p = Params()) {
+  RaceTimes t = raceTimes(s, p);
+  t.untouched = true;
+  return t;
+}
+
+// Every piece moved at the snapshot (untouched `ms` later), RU on.
+static void ruFresh(Snapshot& s, uint32_t ms = RU_MS) {
+  s.untouchedMs = ms;
+  for (int i = 0; i < s.count; i++) s.pieces[i].movedAt = CLOCK;
+}
+
+// The piece on (r,c) goes untouched inMs after the snapshot (0: it is untouched already; inMs
+// must be at least untouchedMs - CLOCK).
+static void staleIn(Snapshot& s, int r, int c, uint32_t inMs) {
+  pieceAt(s, r, c)->movedAt = CLOCK + inMs - s.untouchedMs;
+}
+
+static float ruTime(const Snapshot& s, int r, int c, const RaceTimes& t) {
+  RaceState st;
+  raceInit(st, s, t);
+  return raceUntouchedTime(st, t, r, c);
+}
+
+static const RaceLineEval* ruUnit(const RaceLineEval ev[], int k, int r, int c) {
+  for (int i = 0; i < k; i++)
+    if (raceIsUntouched(ev[i].line) && ev[i].line.r == r && ev[i].line.c == c) return &ev[i];
+  return nullptr;
+}
+
+void test_ru_threat_waits_for_untouched_and_a_neighbour() {
+  // M(3,3) goes untouched in 2000; H(6,4) reaches its neighbour (3,4) in one move (500): the
+  // human waits and places there at 2000.
+  Snapshot s = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      "....H..");
+  ruFresh(s);
+  staleIn(s, 3, 3, 2000);
+  TEST_ASSERT_EQUAL_FLOAT(2000.0f, ruTime(s, 3, 3, ruTimes(s)));
+  // Untouched already: the placement itself (500), not before the placement interval.
+  staleIn(s, 3, 3, 0);
+  TEST_ASSERT_EQUAL_FLOAT(500.0f, ruTime(s, 3, 3, ruTimes(s)));
+  setGap(s, 700);
+  TEST_ASSERT_EQUAL_FLOAT(700.0f, ruTime(s, 3, 3, ruTimes(s)));
+  setGap(s, 0);
+  // Two moves to (2,3) or (4,3) would be 4000; one is enough. A cooldown delays it.
+  setCooldown(s, 6, 4, 1000);
+  TEST_ASSERT_EQUAL_FLOAT(1500.0f, ruTime(s, 3, 3, ruTimes(s)));
+  setCooldown(s, 6, 4, 0);
+  // Easy reads only a held piece's placement; the read off, RU off or the piece far from going
+  // untouched: never.
+  Params easy;
+  easy.level = Level::Easy;
+  TEST_ASSERT_TRUE(raceInf(ruTime(s, 3, 3, ruTimes(s, easy))));
+  TEST_ASSERT_TRUE(raceInf(ruTime(s, 3, 3, raceTimes(s, Params()))));
+  Snapshot off = s;
+  off.untouchedMs = 0;
+  TEST_ASSERT_TRUE(raceInf(ruTime(off, 3, 3, ruTimes(off))));
+  // A human piece is not a machine piece's threat.
+  TEST_ASSERT_TRUE(raceInf(ruTime(s, 6, 4, ruTimes(s))));
+}
+
+void test_ru_held_piece_and_pending_target() {
+  // A held piece whose origin (6,4) is below: put down on (3,4) at humanPlace (350); easy reads it.
+  Snapshot s = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      "....h..");
+  ruFresh(s);
+  staleIn(s, 3, 3, 0);
+  Params easy;
+  easy.level = Level::Easy;
+  TEST_ASSERT_EQUAL_FLOAT(350.0f, ruTime(s, 3, 3, ruTimes(s)));
+  TEST_ASSERT_EQUAL_FLOAT(350.0f, ruTime(s, 3, 3, ruTimes(s, easy)));
+  // A pending placement next to it lands at gap: a capture when the piece is untouched by then.
+  Snapshot p = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      "h......");
+  ruFresh(p);
+  setGap(p, 600);
+  p.pending = true;
+  p.pendingR = 3;
+  p.pendingC = 4;
+  p.pendingId = pieceAt(p, 6, 0)->id;
+  staleIn(p, 3, 3, 400);
+  TEST_ASSERT_EQUAL_FLOAT(600.0f, ruTime(p, 3, 3, ruTimes(p)));
+  // Landing before the piece goes untouched captures nothing; then only two moves of the landed
+  // piece (via (2,4) to (2,3)) reach a neighbour: its cooldown gap + 3000, then
+  // max(3600 + 500, first placement 1600) + 3000 + 500 = 7600.
+  staleIn(p, 3, 3, 800);
+  TEST_ASSERT_EQUAL_FLOAT(7600.0f, ruTime(p, 3, 3, ruTimes(p)));
+}
+
+void test_ru_enclosed_piece_falls_to_step_away_and_back() {
+  // M(0,0): its neighbours are H(0,1) and M(1,0). H(0,1) steps away (500) and H(0,4) slides into
+  // its square: max(500 + 1000, 500 + 500, 0 + 500) = 1500 (H3); H(0,1) coming back is 4000 (H4).
+  Snapshot s = makeSnap(
+      "MH..H..\n"
+      "M......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......");
+  ruFresh(s);
+  staleIn(s, 0, 0, 0);
+  TEST_ASSERT_EQUAL_FLOAT(1500.0f, ruTime(s, 0, 0, ruTimes(s)));
+  staleIn(s, 0, 0, 2500);
+  TEST_ASSERT_EQUAL_FLOAT(2500.0f, ruTime(s, 0, 0, ruTimes(s)));
+  // M(1,0) is still fresh: untouched in RU_MS, its neighbour (1,1) one move away for H(0,1).
+  TEST_ASSERT_EQUAL_FLOAT(static_cast<float>(RU_MS), ruTime(s, 1, 0, ruTimes(s)));
+}
+
+void test_ru_moving_resets_the_timer_and_dragged_piece_is_safe() {
+  Snapshot s = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      "....H..");
+  ruFresh(s);
+  staleIn(s, 3, 3, 0);
+  const RaceTimes t = ruTimes(s);
+  RaceState st;
+  raceInit(st, s, t);
+  TEST_ASSERT_EQUAL_FLOAT(500.0f, raceUntouchedTime(st, t, 3, 3));
+  // Moved to (2,3), arriving at 1000: untouched again RU_MS after the arrival.
+  raceMoveMachine(st, t, 3, 3, 2, 3, 1000.0f);
+  TEST_ASSERT_EQUAL_FLOAT(1000.0f + RU_MS, raceUntouchedTime(st, t, 2, 3));
+  TEST_ASSERT_TRUE(raceInf(raceUntouchedTime(st, t, 3, 3)));
+  // The piece being dragged (it holds the reservation) is off the board for the human.
+  s.reservedR = 2;
+  s.reservedC = 3;
+  s.reservedId = pieceAt(s, 3, 3)->id;
+  TEST_ASSERT_TRUE(raceInf(ruTime(s, 3, 3, t)));
+}
+
+void test_ru_unit_is_guarded_with_a_refresh_move() {
+  // The RU unit of M(3,3) (untouched in 2000, threatened at 2000) is guarded by moving the piece:
+  // S = react 250 + engage 200 = 450 with the head on it.
+  Snapshot s = makeSnap(
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "...M...\n"
+      ".......\n"
+      ".......\n"
+      "....H..",
+      3.0f, 3.0f);
+  ruFresh(s);
+  staleIn(s, 3, 3, 2000);
+  RaceLineEval ev[RACE_MAX_LINES];
+  {
+    const RaceTimes t = ruTimes(s);
+    RaceState st;
+    raceInit(st, s, t);
+    const int k = raceAssess(st, t, ev);
+    const RaceLineEval* u = ruUnit(ev, k, 3, 3);
+    TEST_ASSERT_NOT_NULL(u);
+    TEST_ASSERT_EQUAL_INT(1, u->line.len);
+    TEST_ASSERT_EQUAL_FLOAT(2000.0f, u->th);
+    TEST_ASSERT_TRUE(u->danger);
+    TEST_ASSERT_TRUE(u->guarded);
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, u->save);
+    TEST_ASSERT_EQUAL_INT(3, u->guardR);
+    TEST_ASSERT_EQUAL_INT(3, u->guardC);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, u->risk);
+    uint8_t ends[MAX_N * MAX_N];
+    TEST_ASSERT_EQUAL_INT(4, raceUnitEnds(st.board, u->line, ends));
+    TEST_ASSERT_EQUAL_INT(2 * 7 + 3, ends[0]);
+    TEST_ASSERT_EQUAL_INT(4 * 7 + 3, ends[3]);
+    uint8_t sqs[MAX_N * MAX_N];
+    TEST_ASSERT_EQUAL_INT(1, raceUnitSquares(st.board, u->line, sqs));
+    TEST_ASSERT_EQUAL_INT(3 * 7 + 3, sqs[0]);
+    // Without the read the lines are as before and no RU unit is read.
+    const RaceTimes off = raceTimes(s, Params());
+    RaceState st0;
+    raceInit(st0, s, off);
+    const int k0 = raceAssess(st0, off, ev);
+    TEST_ASSERT_NULL(ruUnit(ev, k0, 3, 3));
+    TEST_ASSERT_EQUAL_INT(k - 1, k0);
+  }
+  // Cooling down for 1500 more: S = 1950 is too late, risk = 0.5 + (1950 + 200 - 2000) / 2000.
+  setCooldown(s, 3, 3, 1500);
+  const RaceTimes t = ruTimes(s);
+  RaceState st;
+  raceInit(st, s, t);
+  const int k = raceAssess(st, t, ev);
+  const RaceLineEval* u = ruUnit(ev, k, 3, 3);
+  TEST_ASSERT_NOT_NULL(u);
+  TEST_ASSERT_FALSE(u->guarded);
+  TEST_ASSERT_EQUAL_FLOAT(1950.0f, u->save);
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.575f, u->risk);
+  float risk[MAX_N * MAX_N];
+  racePieceRisk(st.board, ev, k, risk);
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.575f, risk[3 * 7 + 3]);
+}
+
+void test_ru_far_unit_without_a_safe_move_is_no_danger_yet() {
+  // M(0,0) cannot move: M(0,1) and the held piece's origin (1,0) (closed to the machine) fill
+  // its neighbours. H(6,0) can be put on (1,0) once the held piece is placed elsewhere and the
+  // interval has passed: max(350 + 500, 350 + 1000) = 1350.
+  Snapshot s = makeSnap(
+      "MM.....\n"
+      "h......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "H......",
+      0.0f, 0.0f);
+  RaceLineEval ev[RACE_MAX_LINES];
+  {
+    // Untouched now: a danger with no save, risk clamp((2500 - 1350) / 1000) = 1.
+    ruFresh(s);
+    staleIn(s, 0, 0, 0);
+    const RaceTimes t = ruTimes(s);
+    RaceState st;
+    raceInit(st, s, t);
+    const int k = raceAssess(st, t, ev);
+    const RaceLineEval* u = ruUnit(ev, k, 0, 0);
+    TEST_ASSERT_NOT_NULL(u);
+    TEST_ASSERT_EQUAL_FLOAT(1350.0f, u->th);
+    TEST_ASSERT_TRUE(u->danger);
+    TEST_ASSERT_FALSE(u->guarded);
+    TEST_ASSERT_TRUE(raceInf(u->save));
+    TEST_ASSERT_EQUAL_FLOAT(1.0f, u->risk);
+  }
+  // Untouched in 12000 (beyond RACE_DANGER_MS, inside RACE_UNTOUCHED_DANGER_MS) with no safe
+  // move: read, but left to later reads (no danger, no risk). Pieces untouched later than
+  // RACE_UNTOUCHED_DANGER_MS are no unit at all.
+  ruFresh(s, 20000);
+  staleIn(s, 0, 0, 12000);
+  const RaceTimes t = ruTimes(s);
+  RaceState st;
+  raceInit(st, s, t);
+  const int k = raceAssess(st, t, ev);
+  const RaceLineEval* u = ruUnit(ev, k, 0, 0);
+  TEST_ASSERT_NOT_NULL(u);
+  TEST_ASSERT_EQUAL_FLOAT(12000.0f, u->th);
+  TEST_ASSERT_FALSE(u->danger);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, u->risk);
+  TEST_ASSERT_NULL(ruUnit(ev, k, 0, 1));
+}
+
+void test_ru_rest_opens_a_neighbour_of_an_untouched_piece() {
+  // M(0,0) is untouched, enclosed by M(0,1) and M(1,0). Moving M(1,0) to (1,3) opens (1,0), which
+  // H(6,0) reaches in one move: the rest is taken at 500.
+  Snapshot s = makeSnap(
+      "MM.....\n"
+      "M......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      ".......\n"
+      "H......",
+      1.0f, 0.0f);
+  ruFresh(s);
+  staleIn(s, 0, 0, 0);
+  float thDest, thRest;
+  {
+    const RaceTimes t = ruTimes(s);
+    RaceState st;
+    raceInit(st, s, t);
+    TEST_ASSERT_TRUE(raceInf(raceUntouchedTime(st, t, 0, 0)));
+    raceDestTimes(st, t, 1, 0, 1, 3, &thDest, &thRest);
+    TEST_ASSERT_EQUAL_FLOAT(500.0f, thRest);
+    TEST_ASSERT_FALSE(raceSafeDest(st, t, 1, 0, 1, 3, 450.0f));
+  }
+  const RaceTimes off = raceTimes(s, Params());
+  RaceState st0;
+  raceInit(st0, s, off);
+  raceDestTimes(st0, off, 1, 0, 1, 3, &thDest, &thRest);
+  TEST_ASSERT_TRUE(raceInf(thRest));
+}
+
+void test_ru_one_move_guards_the_piece_and_its_lines() {
+  // Trap A with M(5,3) untouched in 1400: its RU unit (1400), its row (H2 1500) and its column
+  // (4000) are all threatened. One move of the piece to a safe square saves all three at once
+  // (without the cover, the row and column would need the head again after the RU unit's guard).
+  Snapshot s = makeSnap(TRAP_A, 5.0f, 3.0f);
+  ruFresh(s);
+  staleIn(s, 5, 3, 1400);
+  const RaceTimes t = ruTimes(s);
+  RaceState st;
+  raceInit(st, s, t);
+  RaceLineEval ev[RACE_MAX_LINES];
+  const int k = raceAssess(st, t, ev);
+  const RaceLineEval* u = ruUnit(ev, k, 5, 3);
+  const RaceLineEval* row = nullptr;
+  const RaceLineEval* col = nullptr;
+  for (int i = 0; i < k; i++) {
+    if (raceIsUntouched(ev[i].line) || ev[i].line.r != 5 || ev[i].line.c != 3) continue;
+    if (ev[i].line.dr == 0 && ev[i].line.dc == 1) row = &ev[i];
+    if (ev[i].line.dr == 1) col = &ev[i];
+  }
+  TEST_ASSERT_NOT_NULL(u);
+  TEST_ASSERT_NOT_NULL(row);
+  TEST_ASSERT_NOT_NULL(col);
+  TEST_ASSERT_EQUAL_FLOAT(1400.0f, u->th);
+  TEST_ASSERT_EQUAL_FLOAT(1500.0f, row->th);
+  const RaceLineEval* units[3] = {u, row, col};
+  for (const RaceLineEval* e : units) {
+    TEST_ASSERT_TRUE(e->danger);
+    TEST_ASSERT_TRUE(e->guarded);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, e->risk);
+    TEST_ASSERT_EQUAL_FLOAT(450.0f, e->save);
+    TEST_ASSERT_EQUAL_INT(5, e->guardR);
+    TEST_ASSERT_EQUAL_INT(3, e->guardC);
+    TEST_ASSERT_EQUAL_INT(u->toR, e->toR);
+    TEST_ASSERT_EQUAL_INT(u->toC, e->toC);
+    TEST_ASSERT_EQUAL_INT(u->order, e->order);
+  }
+  TEST_ASSERT_TRUE(raceSafeDest(st, t, 5, 3, u->toR, u->toC, 450.0f));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_trap_a_h2);
@@ -731,5 +1070,13 @@ int main(int, char**) {
   RUN_TEST(test_re_enclosed_group_falls_to_step_away_and_back);
   RUN_TEST(test_re_group_risk_reaches_its_pieces);
   RUN_TEST(test_re_corner_is_no_safe_destination);
+  RUN_TEST(test_ru_threat_waits_for_untouched_and_a_neighbour);
+  RUN_TEST(test_ru_held_piece_and_pending_target);
+  RUN_TEST(test_ru_enclosed_piece_falls_to_step_away_and_back);
+  RUN_TEST(test_ru_moving_resets_the_timer_and_dragged_piece_is_safe);
+  RUN_TEST(test_ru_unit_is_guarded_with_a_refresh_move);
+  RUN_TEST(test_ru_far_unit_without_a_safe_move_is_no_danger_yet);
+  RUN_TEST(test_ru_rest_opens_a_neighbour_of_an_untouched_piece);
+  RUN_TEST(test_ru_one_move_guards_the_piece_and_its_lines);
   return UNITY_END();
 }
