@@ -686,6 +686,26 @@ void test_ai_case_rules_field() {
   TEST_ASSERT_FALSE(parseAiCase("M...H.... - 0,0 - 3,1.5,100,250,H,0.25,0 RE none", c));  // rules need gap/lift
 }
 
+// The advance weight (Params::advanceWeight, plan 2026-11-06 Step 0b): as tuned (30) the read
+// stays on its home row at the start; the forced-advance test setting brings a piece out.
+void test_advance_weight_brings_the_machine_out() {
+  Game g;
+  g.start(0);
+  g.tick(3000);
+  const Snapshot s = g.snapshot(0.0f, 3.0f);
+  for (int level = 0; level < 3; level++) {
+    Params p;
+    p.level = static_cast<Level>(level);
+    TEST_ASSERT_EQUAL_FLOAT(30.0f, p.advanceWeight);
+    TEST_ASSERT_TRUE(think(s, p).none);
+    p.advanceWeight = 120.0f;
+    const AiMove m = think(s, p);
+    TEST_ASSERT_FALSE(m.none);
+    TEST_ASSERT_EQUAL_INT(0, pieceById(s, m.pieceId).r);
+    TEST_ASSERT_TRUE(m.toR >= 2);
+  }
+}
+
 // think() time under RE + RW (plan 2026-11-06 3.2): the same budgets as R0's on the PC.
 void test_think_time_with_rules() {
   double total = 0.0;
@@ -733,5 +753,6 @@ int main(int, char**) {
   RUN_TEST(test_re_read_takes_an_enclosed_corner);
   RUN_TEST(test_ai_case_rules_field);
   RUN_TEST(test_think_time_with_rules);
+  RUN_TEST(test_advance_weight_brings_the_machine_out);
   return UNITY_END();
 }

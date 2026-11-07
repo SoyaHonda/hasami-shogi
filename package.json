@@ -11,6 +11,7 @@
     "build:wasm": "node tools/build-wasm.mjs",
     "test": "node --test \"tools/test/*.test.mjs\"",
     "serve": "node tools/serve.mjs",
-    "autoplay": "node tools/autoplay.mjs"
+    "autoplay": "node tools/autoplay.mjs",
+    "build:exploit": "mkdir -p build && g++ -std=gnu++17 -ffp-contract=off -O2 -pthread -Ilib/core -Itools/search-exploit tools/search-exploit/*.cpp lib/core/*.cpp -o build/search-exploit"
   }
 }

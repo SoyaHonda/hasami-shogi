@@ -728,6 +728,148 @@ void test_trap_d_in_time() {
   checkTraps(cases, 3, true);
 }
 
+// ---- B1 and the activity measures (plan 2026-11-06 3.3, 3.5) ----
+
+// B1's thinking time: the wait from a placement landing to the next lift is drawn from
+// [reactMs, thinkMaxMs] (Race may add 100 ms looks when it has no move).
+void test_b1_thinking_time() {
+  BotParams b;
+  b.style = BotStyle::Race;
+  b.reactMs = 1000;
+  b.thinkMaxMs = 3000;
+  SimDriver d(Rules(), Params(), 4);
+  d.enableBot(b);
+  d.start();
+  uint32_t lo = 0xFFFFFFFFu, hi = 0;
+  int waits = 0;
+  bool held = false;
+  for (uint32_t t = 0; t < 180000 && d.state().phase != Phase::Over; t += 10) {
+    d.advance(10);
+    const Game& g = d.game();
+    if (!held && g.heldCount() > 0) {
+      const Snapshot s = g.snapshot(0.0f, 0.0f);
+      if (s.hasLastPlace) {
+        const uint32_t w = g.clockMs() - s.lastPlaceAt;
+        if (w < lo) lo = w;
+        if (w > hi) hi = w;
+        waits++;
+      }
+    }
+    held = g.heldCount() > 0;
+  }
+  TEST_ASSERT_TRUE(waits >= 10);
+  TEST_ASSERT_TRUE(lo >= 1000);
+  TEST_ASSERT_TRUE(hi - lo >= 1000);  // drawn, not fixed
+}
+
+// A position where the human piece just put on (3,3) (cooling down) can be closed by the
+// machine: (3,2) is a machine piece and (0,4) comes down column 4.
+static void threatPosition(Game& g) {
+  g.start(0);
+  g.tick(3000);
+  g.onMachineStep(5, 3, 2);
+  g.onMachineStep(3, 4, 1);  // keeps (6,1) from reaching (3,1): no capture to make
+  TEST_ASSERT_EQUAL_INT((int)LiftResult::Ok, (int)g.onHumanLift(6, 3, 3010));
+  TEST_ASSERT_EQUAL_INT((int)PlaceResult::Ok, (int)g.onHumanPlace(3, 3, 3500));
+}
+
+// B1's threat miss: seeing the threat, Race always takes the move that leaves its pieces the
+// least in prospect for the machine; blind to it (threatMiss 1), only the machine's spare time
+// counts, so some seeds pick moves that leave more in prospect.
+void test_b1_threat_miss() {
+  Game g;
+  threatPosition(g);
+  g.tick(4600);
+  float sighted = -1.0f, blindMax = 0.0f;
+  for (uint32_t seed = 1; seed <= 6; seed++) {
+    BotParams b;
+    b.style = BotStyle::Race;
+    HumanBot sightedBot(b, seed);
+    const BotMove m = sightedBot.choose(g, 0.0f, 3.0f);
+    TEST_ASSERT_EQUAL_INT((int)BotMove::Move, (int)m.kind);
+    const float own = sightedBot.raceAfter(g, 0.0f, 3.0f, m.id, m.toR, m.toC).ownGain;
+    if (sighted < 0.0f) sighted = own;
+    TEST_ASSERT_EQUAL_FLOAT(sighted, own);
+    b.threatMiss = 1.0f;
+    HumanBot blindBot(b, seed);
+    const BotMove mb = blindBot.choose(g, 0.0f, 3.0f);
+    const float ownBlind = blindBot.raceAfter(g, 0.0f, 3.0f, mb.id, mb.toR, mb.toC).ownGain;
+    TEST_ASSERT_TRUE(ownBlind >= sighted - 1e-6f);
+    if (ownBlind > blindMax) blindMax = ownBlind;
+  }
+  TEST_ASSERT_TRUE(blindMax > sighted + 0.5f);
+}
+
+// With both B1 settings off the bot draws nothing new: the same games as before.
+void test_b1_settings_off_change_nothing() {
+  for (BotStyle style : {BotStyle::Race, BotStyle::Trap}) {
+    BotParams a;
+    a.style = style;
+    BotParams b = a;
+    b.thinkMaxMs = a.reactMs;  // not above reactMs: off
+    const Outcome oa = autoplay(6, Params(), a);
+    const Outcome ob = autoplay(6, Params(), b);
+    TEST_ASSERT_EQUAL_UINT32(oa.clockMs, ob.clockMs);
+    TEST_ASSERT_EQUAL_INT(oa.capHuman, ob.capHuman);
+    TEST_ASSERT_EQUAL_INT(oa.capMachine, ob.capMachine);
+    TEST_ASSERT_EQUAL_INT(oa.machineMoves, ob.machineMoves);
+  }
+}
+
+// The outside share weighs each moment by the machine pieces left; a threat in prospect counts
+// once while its line keeps its shape; moves straight back and the first move are recorded.
+void test_activity_meter() {
+  Game g;
+  threatPosition(g);
+  ActivityMeter am;
+  Params p;
+  for (uint32_t t = 3510; t <= 8500; t += 10) {
+    g.tick(t);
+    am.observe(g, 0.0f, 3.0f, p);
+  }
+  const ActivityStats& s = am.stats();
+  TEST_ASSERT_UINT32_WITHIN(20, 5000, s.playMs);
+  // Two of the seven machine pieces stand outside row 0 the whole time.
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, 2.0 / 7.0, ActivityMeter::outsideShare(s));
+  TEST_ASSERT_FLOAT_WITHIN(1e-6, (3.0 + 4.0) / 7.0, ActivityMeter::meanRow(s));
+  // The cooling piece on (3,3): the machine closes (3,4) before it can get away, once.
+  TEST_ASSERT_EQUAL_INT(1, s.threats);
+  TEST_ASSERT_EQUAL_INT(1, s.lineThreats);
+  TEST_ASSERT_EQUAL_INT(0, s.groupThreats);
+  TEST_ASSERT_EQUAL_UINT32(ACTIVITY_NONE, s.firstCaptureMs);
+  TEST_ASSERT_EQUAL_INT(-1, s.firstMoveId);
+  am.machineMove(5, 3, 2, 4, 2);
+  am.machineMove(7, 0, 3, 2, 3);
+  am.machineMove(5, 4, 2, 3, 2);  // straight back
+  am.machineMove(5, 3, 2, 3, 0);
+  TEST_ASSERT_EQUAL_INT(4, am.stats().moves);
+  TEST_ASSERT_EQUAL_INT(1, am.stats().backForth);
+  TEST_ASSERT_EQUAL_INT(5, am.stats().firstMoveId);
+  TEST_ASSERT_EQUAL_INT(4, am.stats().firstMoveR);
+  TEST_ASSERT_EQUAL_INT(2, am.stats().firstMoveC);
+}
+
+// In a game the meter sees what SimDriver counts: the moves, the first capture and Play time.
+void test_activity_in_state() {
+  Params p;
+  p.level = Level::Hard;
+  p.advanceWeight = 120.0f;
+  SimDriver d(Rules(), p, 2);
+  d.enableBot(botOf(BotStyle::Race));
+  d.start();
+  for (int i = 0; i < 12000 && d.state().phase != Phase::Over; i++) d.advance(10);
+  const State s = d.state();
+  TEST_ASSERT_EQUAL_INT(s.machineMoves, s.activity.moves);
+  TEST_ASSERT_UINT32_WITHIN(10, s.clockMs, s.activity.playMs);
+  TEST_ASSERT_TRUE(ActivityMeter::outsideShare(s.activity) > 0.0);
+  TEST_ASSERT_TRUE(s.activity.firstMoveId >= 1);
+  if (s.capturedHuman + s.capturedMachine > 0) {
+    TEST_ASSERT_TRUE(s.activity.firstCaptureMs <= s.clockMs);
+  } else {
+    TEST_ASSERT_EQUAL_UINT32(ACTIVITY_NONE, s.activity.firstCaptureMs);
+  }
+}
+
 void test_state_shape_and_manual_play() {
   SimDriver d(Rules(), Params(), 1);
   State s = d.state();
@@ -897,6 +1039,11 @@ void test_rule_bot_games_finish() {
 
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_b1_thinking_time);
+  RUN_TEST(test_b1_threat_miss);
+  RUN_TEST(test_b1_settings_off_change_nothing);
+  RUN_TEST(test_activity_meter);
+  RUN_TEST(test_activity_in_state);
   RUN_TEST(test_state_shape_and_manual_play);
   RUN_TEST(test_same_seed_same_game);
   RUN_TEST(test_events_are_recorded);

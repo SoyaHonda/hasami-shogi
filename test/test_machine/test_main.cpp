@@ -421,6 +421,48 @@ void test_no_route_pauses_then_manual_removal() {
   TEST_ASSERT_EQUAL_INT((int)Phase::Play, (int)g.phase());
 }
 
+// rebind(): a controller copied with its game and gantry drives the copies once rebound, and the
+// original goes on untouched (the search exploiter's World copies all three).
+void test_controller_copy_rebinds() {
+  Game g;
+  startPlay(g);
+  Params p;
+  VirtualGantry vg(p, 0.0f, 3.0f);
+  MachineController mc(g, vg, p);
+  uint32_t now = 3000;
+  step(g, mc, now);
+  mc.takeSnapshot(now);
+  mc.onThinkResult(move(mId(2), 3, 2), now);
+  for (int i = 0; i < 40; i++) {
+    now += 10;
+    step(g, mc, now);
+    vg.update(now);
+  }
+  TEST_ASSERT_TRUE(mc.job().active);
+  Game g2 = g;
+  VirtualGantry vg2 = vg;
+  MachineController mc2 = mc;
+  mc2.rebind(g2, vg2);
+  const int r0 = piece(g, mId(2)).r;
+  uint32_t now2 = now;
+  for (int i = 0; i < 400; i++) {
+    now2 += 10;
+    g2.tick(now2);
+    mc2.update(now2);
+    vg2.update(now2);
+  }
+  TEST_ASSERT_FALSE(mc2.job().active);
+  TEST_ASSERT_EQUAL_INT(3, piece(g2, mId(2)).r);  // the copy's piece arrived
+  TEST_ASSERT_EQUAL_INT(r0, piece(g, mId(2)).r);  // the original's did not move meanwhile
+  TEST_ASSERT_TRUE(mc.job().active);
+  for (int i = 0; i < 400; i++) {
+    now += 10;
+    step(g, mc, now);
+    vg.update(now);
+  }
+  TEST_ASSERT_EQUAL_INT(3, piece(g, mId(2)).r);
+}
+
 void test_virtual_gantry_drag_to_reserve_rows() {
   Params p;
   p.dragSpeed = 2.0f;
@@ -837,6 +879,7 @@ void test_led_wall_square_is_not_a_destination() {
 
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_controller_copy_rebinds);
   RUN_TEST(test_stage_durations_follow_params);
   RUN_TEST(test_removal_magnet_modes);
   RUN_TEST(test_wants_think_timing);

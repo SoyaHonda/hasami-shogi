@@ -51,6 +51,7 @@ void SimDriver::reset() {
   std::memset(riskCount_, 0, sizeof(riskCount_));
   for (int i = 0; i <= 2 * MAX_N; i++) aliveSeen_[i] = true;
   riskMarginMs_ = 0;
+  activity_.reset();
   eventHead_ = 0;
   eventCount_ = 0;
   eventSeq_ = 0;
@@ -120,11 +121,14 @@ void SimDriver::advance(uint32_t dtMs) {
     const JobView j = controller_.job();
     if (!wasActive && j.active && !j.removing) {
       machineMoves_++;
+      const PieceView& mp = game_.pieces()[j.pieceId - 1];
+      activity_.machineMove(j.pieceId, mp.r, mp.c, j.toR, j.toC);
       for (int i = 0; i < game_.heldCount(); i++) lift_[game_.heldIds()[i]].responded = true;
     }
   }
   if (botOn_) runBot();
   noteLosses();
+  activity_.observe(game_, gantry_.headR(), gantry_.headC(), params_);
 }
 
 void SimDriver::noteRisk(const AiDebug& dbg, uint32_t clock) {
@@ -271,6 +275,7 @@ State SimDriver::state() const {
   s.pendingC = game_.pendingCell().c;
   s.openingHuman = game_.openingDone(HUMAN);
   s.openingMachine = game_.openingDone(MACHINE);
+  s.activity = activity_.stats();
   s.eventCount = eventCount_;
   for (int i = 0; i < eventCount_; i++) {
     const int idx = (eventHead_ - 1 - i + 2 * MAX_EVENTS) % MAX_EVENTS;

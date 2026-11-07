@@ -27,6 +27,13 @@ class MachineController {
 
   void setParams(const Params& p) { params_ = p; }
   const Params& params() const { return params_; }
+  // Drives another Game and gantry from now on. A copy of the controller still drives the
+  // original ones until rebound: whoever copies a Game, its gantry and their controller together
+  // (the search exploiter of plan 2026-11-06 3.11) rebinds the copy to the copied two.
+  void rebind(Game& game, IGantry& gantry) {
+    game_ = &game;
+    gantry_ = &gantry;
+  }
 
   // True when it is time to read: max(150, reactMs) after the last read, or (with readLift)
   // reactMs after the latest lift, whichever is earlier. False outside Play, during a job and
@@ -58,8 +65,8 @@ class MachineController {
   void startRemoval(uint32_t now);
   void endJob();
 
-  Game& game_;
-  IGantry& gantry_;
+  Game* game_;
+  IGantry* gantry_;
   Params params_;
 
   uint32_t lastRead_;

@@ -546,6 +546,7 @@ bindRange('free', () => params.freeSpeed, (v) => { params.freeSpeed = v; applyPa
 bindRange('react', () => params.reactMs, (v) => { params.reactMs = Math.round(v); applyParams(); }, (v) => v + ' ms');
 bindRange('hMove', () => params.humanMoveMs / 1000, (v) => { params.humanMoveMs = Math.round(v * 1000); applyParams(); }, (v) => v.toFixed(2) + ' 秒');
 bindRange('aggr', () => params.aggression, (v) => { params.aggression = v; applyParams(); }, (v) => Math.round(v * 100) + ' %');
+bindRange('adv', () => params.advanceWeight, (v) => { params.advanceWeight = v; applyParams(); }, (v) => String(Math.round(v)));
 $('read').checked = params.readLift;
 $('read').onchange = (e) => {
   params.readLift = e.target.checked;

@@ -122,6 +122,11 @@
         <span class="hint">高いほど、多少危なくても前に出て、はさむ形を作りにいきます。</span>
       </div>
       <div class="row">
+        <label for="adv">前進の重み（試験用）</label><output id="advOut">30</output>
+        <input type="range" id="adv" min="0" max="240" step="10" value="30">
+        <span class="hint">機械の読みの前進の点の重みです。出荷の値は30で、30では機械はほとんど一段目から出ません。ルールの比較（計画の Step 0b）では120で前進を強制しました。</span>
+      </div>
+      <div class="row">
         <label for="hMove">人間の1手の時間（機械の見積もり）</label><output id="hMoveOut">0.5 秒</output>
         <input type="range" id="hMove" min="0.2" max="1" step="0.05" value="0.5">
         <span class="hint">機械は、あなたが駒を持ち上げて置くまでにこれだけかかるとして読みます。短いほど用心深くなります。</span>

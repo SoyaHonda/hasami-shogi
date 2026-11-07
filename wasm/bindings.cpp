@@ -98,7 +98,7 @@ Params paramsFrom(const val& o) {
   if (!present(o)) return p;
   readObject(o, "params");
   checkKeys(o, "params", {"freeSpeed", "dragSpeed", "engageMs", "reactMs", "level", "aggression", "readLift",
-                          "humanMoveMs", "humanLiftMs", "humanPlaceMs", "humanReactMs"});
+                          "humanMoveMs", "humanLiftMs", "humanPlaceMs", "humanReactMs", "advanceWeight"});
   take(o, "freeSpeed", p.freeSpeed);
   take(o, "dragSpeed", p.dragSpeed);
   take(o, "engageMs", p.engageMs);
@@ -110,6 +110,7 @@ Params paramsFrom(const val& o) {
   take(o, "humanLiftMs", p.humanLiftMs);
   take(o, "humanPlaceMs", p.humanPlaceMs);
   take(o, "humanReactMs", p.humanReactMs);
+  take(o, "advanceWeight", p.advanceWeight);
   return p;
 }
 
@@ -129,13 +130,16 @@ BotParams botFrom(const val& o) {
   BotParams b;
   if (!present(o)) return b;
   readObject(o, "bot");
-  checkKeys(o, "bot", {"reactMs", "moveMs", "moveJitter", "greed", "style"});
+  checkKeys(o, "bot", {"reactMs", "moveMs", "moveJitter", "greed", "style", "thinkMaxMs", "threatMiss"});
   take(o, "reactMs", b.reactMs);
   take(o, "moveMs", b.moveMs);
   take(o, "moveJitter", b.moveJitter);
   take(o, "greed", b.greed);
   if (present(o["style"])) b.style = styleFrom(o["style"]);
+  take(o, "thinkMaxMs", b.thinkMaxMs);
+  take(o, "threatMiss", b.threatMiss);
   if (!(b.moveJitter >= 0.0f && b.moveJitter <= 1.0f)) throwType("bot.moveJitter must be 0..1");
+  if (!(b.threatMiss >= 0.0f && b.threatMiss <= 1.0f)) throwType("bot.threatMiss must be 0..1");
   return b;
 }
 
@@ -172,6 +176,7 @@ val paramsToVal(const Params& p) {
   o.set("humanLiftMs", p.humanLiftMs);
   o.set("humanPlaceMs", p.humanPlaceMs);
   o.set("humanReactMs", p.humanReactMs);
+  o.set("advanceWeight", shortest(p.advanceWeight));
   return o;
 }
 
@@ -182,6 +187,8 @@ val botToVal(const BotParams& b) {
   o.set("moveJitter", shortest(b.moveJitter));
   o.set("greed", shortest(b.greed));
   o.set("style", b.style);
+  o.set("thinkMaxMs", b.thinkMaxMs);
+  o.set("threatMiss", shortest(b.threatMiss));
   return o;
 }
 
@@ -249,6 +256,36 @@ val stateToVal(const State& s) {
   o.set("pendingC", s.pendingC);
   o.set("openingHuman", s.openingHuman);  // RW: the opening move made (true without RW)
   o.set("openingMachine", s.openingMachine);
+  // Activity measures of plan 2026-11-06 3.3 (ActivityMeter): outside = share of the Play time
+  // the machine's pieces spent outside row 0, threats = threats in prospect the machine made.
+  {
+    const ActivityStats& a = s.activity;
+    val act = val::object();
+    act.set("playMs", a.playMs);
+    act.set("outside", ActivityMeter::outsideShare(a));
+    act.set("meanRow", ActivityMeter::meanRow(a));
+    act.set("threats", a.threats);
+    act.set("lineThreats", a.lineThreats);
+    act.set("groupThreats", a.groupThreats);
+    act.set("moves", a.moves);
+    act.set("backForth", a.backForth);
+    if (a.firstMoveId >= 0) {
+      val fm = val::object();
+      fm.set("id", a.firstMoveId);
+      fm.set("r", a.firstMoveR);
+      fm.set("c", a.firstMoveC);
+      act.set("firstMove", fm);
+    } else {
+      act.set("firstMove", val::null());
+    }
+    if (a.firstCaptureMs != ACTIVITY_NONE) {
+      act.set("firstCaptureMs", a.firstCaptureMs);
+    } else {
+      act.set("firstCaptureMs", val::null());
+    }
+    act.set("leadChanges", a.leadChanges);
+    o.set("activity", act);
+  }
   val events = val::array();
   for (int i = 0; i < s.eventCount; i++) {
     const SimEvent& e = s.events[i];

@@ -13,4 +13,8 @@ struct Params {
   // Human timing used by the read (plan 2026-10-31 3.3), in ms: lift and put down, lift until the
   // square is free, put down a piece already lifted, notice a machine move.
   uint32_t humanMoveMs = 500, humanLiftMs = 150, humanPlaceMs = 350, humanReactMs = 300;
+  // Weight of the read's advance points (shape points of plan 2026-10-31 3.9: the sum of r/(n-1)
+  // over the machine pieces, times aggression). The test setting of plan 2026-11-06 Step 0b
+  // raises it to force the machine forward; 30 is the read as tuned.
+  float advanceWeight = 30.0f;
 };

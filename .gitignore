@@ -2,3 +2,4 @@
 node_modules/
 web/hasami.js
 src/golden_cases.h
+build/

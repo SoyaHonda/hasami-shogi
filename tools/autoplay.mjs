@@ -1,10 +1,22 @@
 // Automatic games on the WASM build (plan 5.8, plan 2026-10-31 3.12-3.13): a human bot against
-// the machine, advance(10) in fixed steps, one table row per condition (level x bot x human
-// cooldown).
+// the machine, advance(10) in fixed steps, one table row per condition (rules x advance weight x
+// level x bot x human cooldown).
 //
-//   node tools/autoplay.mjs --games 500 --level normal,hard --bot random,trap,race,race3 \
-//        [--hcd 3] [--seed 1] [--max-min 10] [--csv]
-//        [--baseline-out FILE] [--baseline FILE ...] [--note TEXT]
+//   node tools/autoplay.mjs --games 500 --level normal,hard --bot random,trap,race,race3,b1 \
+//        [--rules r0,re,re+rw,re+rw+ru20] [--advance 30,120] [--hcd 3] [--seed 1] [--max-min 10]
+//        [--csv] [--baseline-out FILE] [--baseline FILE ...] [--note TEXT]
+//
+// --rules: rule sets of plan 2026-11-06 3.1, each a '+'-joined set of r0 (none: the base rules),
+// re (edge capture), rw (wall limit and the opening move) and ru<seconds> (untouched pieces).
+// --advance: the read's advance weight (Params::advanceWeight; the C++ default is the read as
+// tuned, a larger one is the forced-advance test setting of plan 2026-11-06 Step 0b).
+// Bot b1 is the fixed baseline human B1 of plan 2026-11-06 3.5: race with a thinking time of 1-3 s
+// and the machine's threats missed with probability 0.3.
+// Besides the result table, a second table gives the activity measures of plan 2026-11-06 3.3
+// (ActivityMeter of lib/core): outside = share of the Play time the machine's pieces spent
+// outside row 0, threats/min = threats in prospect the machine made per minute of Play, and the
+// measures recorded only (mean row, moves per minute, back-and-forth share, first capture, lead
+// changes, games ending within one piece, distinct first machine moves).
 //
 // Game i of a condition uses seed (--seed + i). Every game ends in the Game itself: by captures,
 // or at the time limit (--max-min minutes of game clock, Rules::timeLimitMs), where the side with
@@ -26,7 +38,15 @@ import { loadHasami } from './load-wasm.mjs';
 const STEP_MS = 10;
 const FORMAT = 'hasami-autoplay/1';
 const BOOTSTRAP = 10_000;
-const BOTS = ['random', 'trap', 'race', 'race3'];
+const BOTS = ['random', 'trap', 'race', 'race3', 'b1'];
+// Bot settings per name (b1: plan 2026-11-06 3.5).
+const BOT_SETTINGS = {
+  random: { style: 'random' },
+  trap: { style: 'trap' },
+  race: { style: 'race' },
+  race3: { style: 'race3' },
+  b1: { style: 'race', reactMs: 1000, thinkMaxMs: 3000, threatMiss: 0.3 },
+};
 // Compared measures and the confidence level of each interval (plan 2026-10-31 3.13).
 const COMPARED = [
   { key: 'lost', name: 'machine_lost', level: 1 - 0.05 / 3 },
@@ -36,7 +56,8 @@ const COMPARED = [
 function usage(msg) {
   if (msg) console.error(`autoplay: ${msg}`);
   console.error(
-    'usage: node tools/autoplay.mjs [--games N] [--level easy,normal,hard] [--bot random,trap,race,race3]\n' +
+    'usage: node tools/autoplay.mjs [--games N] [--level easy,normal,hard] [--bot random,trap,race,race3,b1]\n' +
+      '                              [--rules r0,re,re+rw,re+rw+ru20,...] [--advance WEIGHT,...]\n' +
       '                              [--hcd SECONDS,...] [--seed N] [--max-min MINUTES] [--csv]\n' +
       '                              [--baseline-out FILE] [--baseline FILE ...] [--note TEXT]',
   );
@@ -62,6 +83,8 @@ try {
       level: { type: 'string' },
       bot: { type: 'string', default: 'random' },
       hcd: { type: 'string' },
+      rules: { type: 'string', default: 'r0' },
+      advance: { type: 'string' },
       seed: { type: 'string', default: '1' },
       'max-min': { type: 'string', default: '10' },
       csv: { type: 'boolean', default: false },
@@ -100,15 +123,44 @@ const bots = list(opts.bot).map((s) => {
 const cooldownsMs = opts.hcd
   ? list(opts.hcd).map((s) => Math.round(positiveNumber('hcd', s, { allowZero: true }) * 1000))
   : [defaults.rules.humanCooldownMs];
-if (levels.length === 0 || bots.length === 0 || cooldownsMs.length === 0) usage('empty --level, --bot or --hcd');
+// A rule set name ('re+rw+ru20') -> { name, rules } with the name in a fixed order.
+function parseRuleSet(s) {
+  const rules = { edgeCapture: false, wallLimit: false, untouchedMs: 0 };
+  for (const tok of s.toLowerCase().split('+').map((x) => x.trim())) {
+    if (tok === 'r0' || tok === '') continue;
+    if (tok === 're') rules.edgeCapture = true;
+    else if (tok === 'rw') rules.wallLimit = true;
+    else if (/^ru\d+(\.\d+)?$/.test(tok)) rules.untouchedMs = Math.round(Number(tok.slice(2)) * 1000);
+    else usage(`unknown rule in --rules: ${tok} (r0, re, rw, ru<seconds>)`);
+  }
+  const parts = [];
+  if (rules.edgeCapture) parts.push('re');
+  if (rules.wallLimit) parts.push('rw');
+  if (rules.untouchedMs > 0) parts.push(`ru${rules.untouchedMs / 1000}`);
+  return { name: parts.length ? parts.join('+') : 'r0', rules };
+}
+const ruleSets = list(opts.rules).map(parseRuleSet);
+const advances = opts.advance
+  ? list(opts.advance).map((s) => positiveNumber('advance', s, { allowZero: true }))
+  : [defaults.params.advanceWeight];
+if (levels.length === 0 || bots.length === 0 || cooldownsMs.length === 0 || ruleSets.length === 0 || advances.length === 0)
+  usage('empty --level, --bot, --hcd, --rules or --advance');
 
-const conditionKey = (level, bot, hcdMs) => `${level}/${bot}/hcd${hcdMs / 1000}`;
+// Conditions under the base rules with the default advance weight keep the key of older files.
+const conditionKey = (level, bot, hcdMs, ruleName = 'r0', advance = defaults.params.advanceWeight) =>
+  `${level}/${bot}/hcd${hcdMs / 1000}` +
+  (ruleName === 'r0' ? '' : `/rules:${ruleName}`) +
+  (advance === defaults.params.advanceWeight ? '' : `/adv:${advance}`);
 
 // One game; a new driver each time so that the bot's random sequence starts from `seed`.
-function playOne(level, bot, humanCooldownMs, seed) {
-  const sim = new m.SimDriver({ humanCooldownMs, timeLimitMs: maxClockMs }, { level }, seed >>> 0);
+function playOne(level, bot, humanCooldownMs, seed, ruleSet = ruleSets[0], advanceWeight = advances[0]) {
+  const sim = new m.SimDriver(
+    { humanCooldownMs, timeLimitMs: maxClockMs, ...ruleSet.rules },
+    { level, advanceWeight },
+    seed >>> 0,
+  );
   try {
-    sim.enableBot({ style: bot });
+    sim.enableBot(BOT_SETTINGS[bot]);
     sim.start();
     // Safety net on simulated time: the clock stands still outside Play.
     const maxSimMs = 3 * maxClockMs + 60_000;
@@ -121,6 +173,7 @@ function playOne(level, bot, humanCooldownMs, seed) {
     const over = s.phase === m.Phase.Over;
     const winner = over ? s.winner : m.Winner.None;
     if (!over) console.error(`autoplay: seed ${seed} did not finish (stuck outside Play)`);
+    const a = s.activity;
     return {
       seed,
       lost: s.capturedHuman, // machine pieces the human captured
@@ -134,6 +187,16 @@ function playOne(level, bot, humanCooldownMs, seed) {
       safeReads: s.safeReads,
       lostPredicted: s.lostPredicted,
       saves: s.saves,
+      // Activity (plan 2026-11-06 3.3).
+      playMs: a.playMs,
+      outside: Math.round(a.outside * 10000) / 10000,
+      meanRow: Math.round(a.meanRow * 1000) / 1000,
+      threats: a.threats,
+      moves: a.moves,
+      backForth: a.backForth,
+      firstMove: a.firstMove ? `${a.firstMove.id}>${a.firstMove.r},${a.firstMove.c}` : '',
+      firstCaptureMs: a.firstCaptureMs ?? -1,
+      leadChanges: a.leadChanges,
     };
   } finally {
     sim.delete();
@@ -143,11 +206,16 @@ function playOne(level, bot, humanCooldownMs, seed) {
 const sum = (xs, f) => xs.reduce((a, x) => a + f(x), 0);
 const mean = (xs) => (xs.length ? xs.reduce((a, x) => a + x, 0) / xs.length : NaN);
 
-function summarize(level, bot, hcd, results) {
+function summarize(level, bot, hcd, results, ruleName = 'r0', advance = defaults.params.advanceWeight) {
   const n = results.length;
   const reads = sum(results, (r) => r.reads);
   const lost = sum(results, (r) => r.lost);
+  const playMin = sum(results, (r) => r.playMs) / 60_000;
+  const moves = sum(results, (r) => r.moves);
+  const firstCaps = results.filter((r) => r.firstCaptureMs >= 0).map((r) => r.firstCaptureMs / 1000);
   return {
+    rules: ruleName,
+    advance,
     level: levelName(level),
     bot,
     hcd: hcd / 1000,
@@ -160,6 +228,17 @@ function summarize(level, bot, hcd, results) {
     predictedRate: lost > 0 ? sum(results, (r) => r.lostPredicted) / lost : null,
     avgMin: sum(results, (r) => r.clockMs) / n / 60_000,
     unfinished: n - sum(results, (r) => r.finished),
+    // Activity (plan 2026-11-06 3.3): constraint measures, then the recorded ones.
+    outside: mean(results.map((r) => r.outside)),
+    threatsPerMin: playMin > 0 ? sum(results, (r) => r.threats) / playMin : null,
+    meanRow: mean(results.map((r) => r.meanRow)),
+    movesPerMin: playMin > 0 ? moves / playMin : null,
+    backForth: moves > 0 ? sum(results, (r) => r.backForth) / moves : null,
+    capturesPerGame: sum(results, (r) => r.lost + r.taken) / n,
+    firstCaptureS: firstCaps.length ? mean(firstCaps) : null,
+    leadChanges: sum(results, (r) => r.leadChanges) / n,
+    closeRate: sum(results, (r) => (Math.abs(r.diff) <= 1 ? 1 : 0)) / n,
+    firstMoves: new Set(results.map((r) => r.firstMove).filter((x) => x !== '')).size,
   };
 }
 
@@ -253,13 +332,24 @@ function loadBaselines(files) {
 const baseline = opts.baseline ? loadBaselines(opts.baseline) : null;
 const rows = [];
 const perCondition = {};
-for (const level of levels) {
-  for (const bot of bots) {
-    for (const hcd of cooldownsMs) {
-      const results = [];
-      for (let i = 0; i < games; i++) results.push(playOne(level, bot, hcd, seed0 + i));
-      rows.push(summarize(level, bot, hcd, results));
-      perCondition[conditionKey(levelName(level), bot, hcd)] = { level: levelName(level), bot, hcd: hcd / 1000, games: results };
+for (const ruleSet of ruleSets) {
+  for (const advance of advances) {
+    for (const level of levels) {
+      for (const bot of bots) {
+        for (const hcd of cooldownsMs) {
+          const results = [];
+          for (let i = 0; i < games; i++) results.push(playOne(level, bot, hcd, seed0 + i, ruleSet, advance));
+          rows.push(summarize(level, bot, hcd, results, ruleSet.name, advance));
+          perCondition[conditionKey(levelName(level), bot, hcd, ruleSet.name, advance)] = {
+            rules: ruleSet.name,
+            advance,
+            level: levelName(level),
+            bot,
+            hcd: hcd / 1000,
+            games: results,
+          };
+        }
+      }
     }
   }
 }
@@ -274,15 +364,18 @@ function printTable(header, cells) {
     return;
   }
   const widths = header.map((h, i) => Math.max(h.length, ...cells.map((c) => c[i].length)));
-  const line = (c) => c.map((x, i) => (i <= 1 ? x.padEnd(widths[i]) : x.padStart(widths[i]))).join('  ');
+  const left = new Set(['rules', 'level', 'bot', 'condition', 'measure']);
+  const line = (c) => c.map((x, i) => (left.has(header[i]) ? x.padEnd(widths[i]) : x.padStart(widths[i]))).join('  ');
   console.log(line(header));
   console.log(widths.map((w) => '-'.repeat(w)).join('  '));
   for (const c of cells) console.log(line(c));
 }
 
 printTable(
-  ['level', 'bot', 'hcd_s', 'games', 'machine_lost', 'capture_diff', 'machine_win', 'draw', 'safe_reads', 'predicted', 'avg_min'],
+  ['rules', 'adv', 'level', 'bot', 'hcd_s', 'games', 'machine_lost', 'capture_diff', 'machine_win', 'draw', 'safe_reads', 'predicted', 'avg_min'],
   rows.map((r) => [
+    r.rules,
+    String(r.advance),
     r.level,
     r.bot,
     String(r.hcd),
@@ -296,12 +389,38 @@ printTable(
     fix(r.avgMin, 2),
   ]),
 );
+console.log(opts.csv ? '' : '\nactivity (plan 2026-11-06 3.3):');
+printTable(
+  ['rules', 'adv', 'level', 'bot', 'hcd_s', 'outside', 'threats_min', 'mean_row', 'moves_min', 'back_forth', 'caps_game', 'first_cap_s', 'lead_chg', 'close', 'first_moves'],
+  rows.map((r) => [
+    r.rules,
+    String(r.advance),
+    r.level,
+    r.bot,
+    String(r.hcd),
+    pct(r.outside),
+    fix(r.threatsPerMin, 2),
+    fix(r.meanRow, 2),
+    fix(r.movesPerMin, 2),
+    pct(r.backForth),
+    fix(r.capturesPerGame, 2),
+    fix(r.firstCaptureS, 1),
+    fix(r.leadChanges, 2),
+    pct(r.closeRate),
+    String(r.firstMoves),
+  ]),
+);
 if (!opts.csv) {
   console.log(
     `\nseed ${seed0}..${seed0 + games - 1} per condition, ${maxMin} min time limit (more captures wins there, equal is a draw).` +
       '\nmachine_lost = machine pieces captured per game; capture_diff = (machine captures - human captures) per game;' +
       '\nmachine_win counts a draw as not a win; safe_reads = reads with at least one candidate counted safe;' +
-      '\npredicted = machine pieces lost with risk >= 0.5 in the latest read at least the level\'s margin before the capture.',
+      '\npredicted = machine pieces lost with risk >= 0.5 in the latest read at least the level\'s margin before the capture.' +
+      '\noutside = share of the Play time the machine\'s pieces spent outside row 0 (each moment over the pieces left);' +
+      '\nthreats_min = threats in prospect the machine made per minute of Play (a human line with gain >= 0.5, or under' +
+      '\nRE an edge group with one empty neighbour a machine piece reaches; once per shape); back_forth = machine moves' +
+      '\nthat take a piece straight back; first_cap_s = mean game clock of the first capture (games with one);' +
+      '\nclose = games ending within one piece; first_moves = distinct first machine moves over the games.',
   );
   const unfinished = rows.reduce((a, r) => a + r.unfinished, 0);
   if (unfinished > 0) console.log(`${unfinished} game(s) did not finish.`);
@@ -317,6 +436,8 @@ if (baseline) {
       continue;
     }
     const before = new Map(base.games.map((g) => [g.seed, g]));
+    const curLabel = `${cur.level}/${cur.bot}` + (cur.rules && cur.rules !== 'r0' ? `/${cur.rules}` : '') +
+      (cur.advance !== undefined && cur.advance !== defaults.params.advanceWeight ? `/adv${cur.advance}` : '');
     const pairs = cur.games.filter((g) => before.has(g.seed)).map((g) => [before.get(g.seed), g]);
     if (pairs.length === 0) {
       missing++;
@@ -327,7 +448,7 @@ if (baseline) {
       const [lo, hi] = bootstrapCi(d, c.level, hashString(`${key}/${c.key}`));
       const p = wilcoxonP(d);
       cells.push([
-        `${cur.level}/${cur.bot}`,
+        curLabel,
         c.name,
         String(cur.hcd),
         String(pairs.length),

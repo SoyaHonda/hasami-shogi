@@ -159,7 +159,8 @@ struct RaceKey {
 
 int roundTenths(float v) { return static_cast<int>(v * 10.0f + 0.5f); }
 
-RaceKey raceKey(const BotRaceEval& e, bool threatened) {
+// blind (B1's threat miss): only the machine's spare time counts.
+RaceKey raceKey(const BotRaceEval& e, bool threatened, bool blind = false) {
   float s = e.spare;
   if (s > 100000.0f) s = 100000.0f;
   if (s < -100000.0f) s = -100000.0f;
@@ -167,6 +168,7 @@ RaceKey raceKey(const BotRaceEval& e, bool threatened) {
   const float q = s / 50.0f;
   int bucket = static_cast<int>(q);
   if (static_cast<float>(bucket) > q) bucket--;  // floor
+  if (blind) return RaceKey{{0, 0, bucket, 0}};
   const int own = roundTenths(e.ownGain);
   return RaceKey{{threatened ? own : 0, e.unsafe ? 1 : 0, bucket, own}};
 }
@@ -179,6 +181,7 @@ void HumanBot::reset() {
   holding_ = false;
   heldId_ = -1;
   planR_ = planC_ = -1;
+  blind_ = false;
   armed_ = false;
   nextAt_ = 0;
   failures_ = 0;
@@ -195,6 +198,12 @@ uint32_t HumanBot::moveTime(const Game& game) {
   const uint32_t limit = game.rules().maxHoldMs;
   if (limit > 0 && hold >= limit) hold = limit / 2;
   return hold;
+}
+
+uint32_t HumanBot::waitTime() {
+  if (params_.thinkMaxMs <= params_.reactMs) return params_.reactMs;
+  const int span = static_cast<int>(params_.thinkMaxMs - params_.reactMs);
+  return params_.reactMs + static_cast<uint32_t>(rng_.below(span + 1));
 }
 
 BotRaceEval HumanBot::raceAfter(const Game& game, float headR, float headC, int id, int toR, int toC) const {
@@ -465,13 +474,16 @@ BotMove HumanBot::chooseRace(const Game& game, float headR, float headC, bool se
     for (int i = 0; i < nh && !threatened; i++)
       threatened = raceGain(st, t, hl[i]) >= 0.5f * static_cast<float>(hl[i].len);
   }
+  // B1: now and then the machine's threats go unnoticed.
+  blind_ = params_.threatMiss > 0.0f && rng_.unit() < params_.threatMiss;
+  if (blind_) threatened = false;
 
   int bestIdx[MAX_MOVES];
   int nbest = 0;
   RaceKey bestKey{};
   for (int j = 0; j < nc; j++) {
     const Move& m = mv[cand[j]];
-    const RaceKey key = raceKey(raceAfter(game, headR, headC, m.id, m.tr, m.tc), threatened);
+    const RaceKey key = raceKey(raceAfter(game, headR, headC, m.id, m.tr, m.tc), threatened, blind_);
     if (nbest == 0 || key < bestKey) {
       bestKey = key;
       nbest = 0;
@@ -497,7 +509,7 @@ BotAction HumanBot::decide(const Game& game, float headR, float headC, uint32_t 
     if (!stillHeld) {
       holding_ = false;
       armed_ = true;
-      nextAt_ = clock + params_.reactMs;
+      nextAt_ = clock + waitTime();
       return none;
     }
     // Pending: wait until it lands or is dropped.
@@ -506,7 +518,7 @@ BotAction HumanBot::decide(const Game& game, float headR, float headC, uint32_t 
     return none;  // one piece in hand at a time
   } else if (!armed_) {
     armed_ = true;
-    nextAt_ = clock + params_.reactMs;
+    nextAt_ = clock + waitTime();
   }
   if (clock < nextAt_) return none;
   if (holding_) return putDown(game, headR, headC);
@@ -554,7 +566,7 @@ BotAction HumanBot::decideOpening(const Game& game, float headR, float headC, ui
     if (!stillHeld) {
       // The hold limit put it back: choose again shortly.
       holding_ = false;
-      openNextAt_ = now + params_.reactMs;
+      openNextAt_ = now + waitTime();
       return none;
     }
     if (static_cast<int32_t>(now - openNextAt_) < 0) return none;
@@ -563,7 +575,7 @@ BotAction HumanBot::decideOpening(const Game& game, float headR, float headC, ui
   if (game.openingDone(HUMAN) || game.heldCount() > 0) return none;
   if (!openArmed_) {
     openArmed_ = true;
-    openNextAt_ = now + params_.reactMs;
+    openNextAt_ = now + waitTime();
   }
   if (static_cast<int32_t>(now - openNextAt_) < 0) return none;
   const BotMove m = choose(game, headR, headC);
@@ -619,7 +631,7 @@ BotAction HumanBot::putDown(const Game& game, float headR, float headC) {
       int nb = 0;
       RaceKey bestKey{};
       for (int i = 0; i < k; i++) {
-        const RaceKey key = raceKey(raceAfter(game, headR, headC, heldId_, d[i] / n, d[i] % n), false);
+        const RaceKey key = raceKey(raceAfter(game, headR, headC, heldId_, d[i] / n, d[i] % n), false, blind_);
         if (nb == 0 || key < bestKey) bestKey = key, nb = 0;
         if (key == bestKey) bestSq[nb++] = d[i];
       }
@@ -655,6 +667,7 @@ void HumanBot::onPlaced(const Game& game, PlaceResult res) {
   planR_ = planC_ = -1;
   failures_ = 0;
   armed_ = true;
-  nextAt_ = game.clockMs() + params_.reactMs;
-  openNextAt_ = now_ + params_.reactMs;
+  const uint32_t wait = waitTime();
+  nextAt_ = game.clockMs() + wait;
+  openNextAt_ = now_ + wait;
 }

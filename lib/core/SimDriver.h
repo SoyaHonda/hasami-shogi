@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include "Activity.h"
 #include "Ai.h"
 #include "Game.h"
 #include "HumanBot.h"
@@ -60,6 +61,8 @@ struct State {
   // Opening (RW, plan 2026-11-06 3.1): whether each side has made its opening move (both true
   // without RW).
   bool openingHuman, openingMachine;
+  // The activity measures of plan 2026-11-06 3.3 so far (ActivityMeter).
+  ActivityStats activity;
   SimEvent events[MAX_EVENTS];  // newest first
   int eventCount;
 };
@@ -134,6 +137,7 @@ class SimDriver {
   int riskCount_[2 * MAX_N + 1];
   bool aliveSeen_[2 * MAX_N + 1];
   uint32_t riskMarginMs_;
+  ActivityMeter activity_;
   SimEvent events_[MAX_EVENTS];  // ring buffer
   int eventHead_;                // index of the next write
   int eventCount_;

@@ -19,9 +19,9 @@ namespace {
 constexpr float FORK_PENALTY = 60.0f;  // Hard: a top safe candidate a human threat move breaks
 constexpr int FORK_TOP = 3;            // safe candidates checked for the fork penalty
 constexpr int FORK_THREATS = 12;       // human threat moves checked per candidate
-// Shape weights (3.9): advance (sum of r/(n-1)), human pieces beside a machine piece, machine
-// pieces on the board's edge, vertical pairs of machine pieces.
-constexpr float SHAPE_ADVANCE = 30.0f, SHAPE_ADJACENT = 8.0f, SHAPE_EDGE = 4.0f, SHAPE_PAIR = 4.0f;
+// Shape weights (3.9): human pieces beside a machine piece, machine pieces on the board's edge,
+// vertical pairs of machine pieces. The advance weight (sum of r/(n-1)) is Params::advanceWeight.
+constexpr float SHAPE_ADJACENT = 8.0f, SHAPE_EDGE = 4.0f, SHAPE_PAIR = 4.0f;
 constexpr float TIE_EPS = 0.01f;
 
 float fmax2(float a, float b) { return a > b ? a : b; }
@@ -84,7 +84,7 @@ Board machineBoard(const RaceState& st) {
   return b;
 }
 
-float shapePoints(const Board& b) {
+float shapePoints(const Board& b, float advanceWeight) {
   const int n = b.n;
   const float denom = static_cast<float>(n - 1);
   float adv = 0.0f;
@@ -100,7 +100,7 @@ float shapePoints(const Board& b) {
     if (r == 0 || r == n - 1 || c == 0 || c == n - 1) edge++;
     if (r + 1 < n && b.at(r + 1, c) == MACHINE) pairs++;
   }
-  return adv * SHAPE_ADVANCE + static_cast<float>(adj) * SHAPE_ADJACENT + static_cast<float>(edge) * SHAPE_EDGE +
+  return adv * advanceWeight + static_cast<float>(adj) * SHAPE_ADJACENT + static_cast<float>(edge) * SHAPE_EDGE +
          static_cast<float>(pairs) * SHAPE_PAIR;
 }
 
@@ -184,6 +184,7 @@ struct Ctx {
   const Snapshot* s;
   RaceTimes t;
   float aggr;
+  float advance;  // Params::advanceWeight
   bool fork;
   uint32_t hash;
   OpenLine open[RACE_MAX_LINES];
@@ -320,7 +321,7 @@ float attackPoints(const Ctx& x, const RaceState& st2, const MoveInfo& mi, const
 
 // Score of a safe candidate (3.9), without the fork penalty.
 float safeScore(const Ctx& x, const Cand& c, const MoveInfo& mi, const RaceState& st2) {
-  return attackPoints(x, st2, mi) + x.aggr * shapePoints(st2.board) - timePenalty(c, mi, 2.0f);
+  return attackPoints(x, st2, mi) + x.aggr * shapePoints(st2.board, x.advance) - timePenalty(c, mi, 2.0f);
 }
 
 // The part of a candidate's captures (in pieces) that may not happen: a captured run whose far
@@ -605,6 +606,7 @@ AiMove run(const Snapshot& s, const Params& p, AiDebug* dbg, AiCandidate* list, 
   x.s = &s;
   x.t = raceTimes(s, p);
   x.aggr = p.aggression;
+  x.advance = p.advanceWeight;
   x.fork = p.level == Level::Hard;
   x.hash = snapshotHash(s);
   const RaceTimes& t = x.t;

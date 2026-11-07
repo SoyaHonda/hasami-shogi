@@ -43,7 +43,10 @@ test('defaults() returns the C++ defaults', () => {
   assert.equal(d.params.humanLiftMs, 150);
   assert.equal(d.params.humanPlaceMs, 350);
   assert.equal(d.params.humanReactMs, 300);
-  assert.deepEqual(d.bot, { reactMs: 400, moveMs: 500, moveJitter: 0.4, greed: 0.8, style: m.BotStyle.Random });
+  assert.equal(d.params.advanceWeight, 30);
+  assert.deepEqual(d.bot, {
+    reactMs: 400, moveMs: 500, moveJitter: 0.4, greed: 0.8, style: m.BotStyle.Random, thinkMaxMs: 0, threatMiss: 0,
+  });
 });
 
 test('state() shape of a new 7x7 game', () => {
@@ -195,6 +198,34 @@ test('rule candidates: RW opens with one move each, then Play', () => {
     assert.equal(s.openingMachine, true);
   });
   assert.throws(() => new m.SimDriver({ edge: true }, {}, 1), /edge/);
+});
+
+test('B1 settings, the advance weight and the activity measures in state() (plan 2026-11-06 3.3, 3.5)', () => {
+  withSim([{ edgeCapture: true, wallLimit: true }, { level: 'hard', advanceWeight: 120 }, 3], (sim) => {
+    sim.enableBot({ style: 'race', reactMs: 1000, thinkMaxMs: 3000, threatMiss: 0.3 });
+    sim.start();
+    for (let i = 0; i < 9000 && sim.phase() !== m.Phase.Over; i++) sim.advance(10);
+    const s = sim.state();
+    const a = s.activity;
+    for (const k of ['playMs', 'outside', 'meanRow', 'threats', 'lineThreats', 'groupThreats', 'moves', 'backForth',
+      'firstMove', 'firstCaptureMs', 'leadChanges']) assert.ok(k in a, k);
+    assert.ok(Math.abs(a.playMs - s.clockMs) <= 10);
+    assert.ok(a.outside > 0 && a.outside <= 1, `outside ${a.outside}`);
+    assert.ok(a.meanRow > 0 && a.meanRow <= 6);
+    assert.equal(a.moves, s.machineMoves);
+    assert.equal(a.threats, a.lineThreats + a.groupThreats);
+    assert.ok(a.backForth >= 0 && a.backForth <= a.moves);
+    assert.ok(a.firstMove && a.firstMove.id >= 1);
+    if (s.capturedHuman + s.capturedMachine > 0) assert.ok(a.firstCaptureMs <= s.clockMs);
+    else assert.equal(a.firstCaptureMs, null);
+  });
+  withSim([], (sim) => {
+    const a = sim.state().activity;
+    assert.equal(a.playMs, 0);
+    assert.equal(a.firstMove, null);
+    assert.throws(() => sim.enableBot({ threatMiss: 2 }), /threatMiss/);
+    assert.throws(() => sim.setParams({ advance: 2 }), /advance/);
+  });
 });
 
 test('bot styles by name or enum, and the read counters in state()', () => {

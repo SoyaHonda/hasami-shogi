@@ -19,6 +19,15 @@ struct BotParams {
   float moveJitter = 0.4f;
   float greed = 0.8f;  // Random: chance of taking a capture when there is one
   BotStyle style = BotStyle::Random;
+  // The fixed baseline human B1 of plan 2026-11-06 3.5 (Race with both set: reactMs 1000,
+  // thinkMaxMs 3000, threatMiss 0.3). thinkMaxMs > reactMs: the wait after each placement (the
+  // thinking time) is drawn uniformly from [reactMs, thinkMaxMs] instead of being reactMs.
+  // threatMiss: the chance that a move of Race or Race3 is chosen blind to the machine's
+  // threats (no getting away first, and neither the danger to the moved piece nor the machine's
+  // gain on the human lines counts). Both off by default, and then no random number is drawn
+  // for them (the other styles' games stay as they were).
+  uint32_t thinkMaxMs = 0;
+  float threatMiss = 0.0f;
 };
 
 // Seeded random numbers (xorshift32): the same sequence on every build.
@@ -113,6 +122,8 @@ class HumanBot {
   BotAction liftFor(const Game& game, const BotMove& m);
   BotAction decideOpening(const Game& game, float headR, float headC, uint32_t now);
   uint32_t moveTime(const Game& game);
+  // The wait before the next lift: reactMs, or drawn up to thinkMaxMs (B1).
+  uint32_t waitTime();
 
   BotParams params_;
   Params machine_;
@@ -121,6 +132,9 @@ class HumanBot {
   int heldId_;
   // Planned destination of the held piece (-1 when the style chooses when putting down).
   int planR_, planC_;
+  // The latest Race choice was blind to the machine's threats (threatMiss); putting the piece
+  // down judges a new destination the same way.
+  bool blind_;
   // Game clock of the next action; valid once `armed_` (set on the first Play tick).
   bool armed_;
   uint32_t nextAt_;
