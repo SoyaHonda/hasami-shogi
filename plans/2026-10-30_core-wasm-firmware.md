@@ -160,10 +160,10 @@ class MachineController { public:
 - `lib/hw/HallScanner`: 49マスを100Hzで走査し、`HallClassify` で判定、2回連続で同じなら採用。電磁石の通電中はヘッドのいるマス（0.75マス以内）だけ直前の判定を保持。
 - `lib/hwpure/BoardWatcher`: 判定済みの盤面の変化を、人間の持ち上げ（人間の駒が消えた）、置き（同じマスに200ms続いた）、機械の駒への接触（機械が動かしていないS極の変化）、初期配置との違いのイベントに変える。
 - `lib/hw/Gantry`: `IGantry` の実装。FastAccelStepper（パルスはハードウェアが出す）、80 step/mm（GT2、20歯、1/16）、原点出し、行 −1〜n の範囲。
-- `lib/hw/Magnet`: Hブリッジの2本のPWMで `MagnetMode` を実現。
+- `lib/hw/Magnet`: Hブリッジの2本のPWMで `MagnetMode` を実現。2026-11-10: Hブリッジは TB67H450（真理値表と PWM の最大周波数は未確認）。発熱を抑えるため、Pull に切り替えた直後は全デューティで `BOOST_MS`（仮300ms）、そのあと保持デューティ（`HOLD_DUTY`、測るまでは255で下げない）にする。`update(now)` をループで呼ぶ。連続通電の時間と合計の通電時間を数える。
 - `lib/hw/Leds`: `LedIndex` と `LedPlan` の結果をFastLEDへ。上限1.5A。
 - `src/main.cpp`: コア1で走査→`BoardWatcher`→`Game`・`MachineController`→`Gantry::update`→LED（30Hz）。`wantsThink` で写しをキューでコア0へ送り、コア0の `think` の結果をキューで受けて `onThinkResult`。シリアルコマンド（`scan`、`cal`、`home`、`mv`、`pull`、`ai`、`cd`）。
-- `src/rig/rig_main.cpp`: 1マス試作の測定（`pull v a`、`hall`、`pass d`、`led b`）。
+- `src/rig/rig_main.cpp`: 1マス試作の測定（`pull v a`、`hall`、`pass d`、`led b`）。2026-11-10: `hall` は生の値に加えて mV と DRV5053 の OA・PA それぞれで見積もった mT を出す。`cal`（センサの中心値と磁場ゼロの mV）、`heat s d`（デューティ d で s 秒通電、コイルの温度を測る）、`hold d`（保持デューティを変えて `pull` を試す）を追加。センサの品番（OA・PA）は `Pins.h` の `HALL_SENSOR` で切り替え、`HallClassify` の `hallPreset` が仮のしきい値を出す。
 - ピン割り当ては制作計画に表がないので、支給のESP32を確かめてから `Pins.h` の一か所で決める（ホールセンサはADC1、WROVERなら16/17は使わない）。A4988はMS1〜3をHigh、RESETとSLEEPを接続。
 
 ### 5.10 CI（`.github/workflows/ci.yml`）

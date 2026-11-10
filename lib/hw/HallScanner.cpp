@@ -2,6 +2,9 @@
 #include <Arduino.h>
 
 void HallScanner::begin() {
+  // Provisional thresholds of the sensor variant chosen in Pins.h; calibrate()
+  // replaces each square's centre value.
+  for (auto& t : thr_) t = hallPreset(pins::HALL_SENSOR);
   for (auto& m : cellAt_)
     for (auto& v : m) v = -1;
   for (int i = 0; i < CELLS; ++i) {

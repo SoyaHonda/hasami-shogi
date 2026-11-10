@@ -120,10 +120,12 @@ void setMagnet(MagnetMode m) { gantry.magnet(m); }
 
 bool magnetOn() { return magnet.mode() != MagnetMode::Off; }
 
-// Background work while a command waits: keep scanning with the hold zone.
+// Background work while a command waits: keep scanning with the hold zone, and
+// let the magnet drop from boost to hold duty.
 void service() {
   const uint32_t now = millis();
   gantry.update(now);
+  magnet.update(now);
   scanner.setHold(magnetOn(), gantry.headR(), gantry.headC());
   scanner.update(now);
 }
@@ -544,6 +546,7 @@ void serviceGame() {
   game.tick(now);
   controller.update(now);
   gantry.update(now);
+  magnet.update(now);  // boost -> hold duty (Magnet::BOOST_MS)
   scanner.setHold(magnetOn(), gantry.headR(), gantry.headC());
   serviceThink(now);
   if (now - lastLedMs >= LED_PERIOD_MS) {

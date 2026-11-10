@@ -19,7 +19,8 @@ class HallScanner {
   static constexpr float HOLD_RADIUS = 0.75f;     // squares
   static constexpr int CAL_SAMPLES = 32;
 
-  // Configures the select lines and the ADC (12-bit).
+  // Configures the select lines and the ADC (12-bit, 11 dB attenuation) and
+  // loads every square's thresholds from hallPreset(pins::HALL_SENSOR).
   void begin();
   // Runs one full scan when PERIOD_MS has passed since the last one.
   // Returns true when a scan ran.

@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include "HallClassify.h"  // Drv5053
 
 // ESP32 pin assignment, kept in this one place. PROVISIONAL: the build plan
 // has no pin table, so check the supplied ESP32 board before wiring and edit
@@ -15,6 +16,14 @@
 // A4988 wiring assumed: MS1, MS2, MS3 tied High (1/16 step), RESET tied to
 // SLEEP. Neither is driven by the ESP32.
 namespace pins {
+
+// Hall sensor variant, the one switch for the whole firmware (rig included):
+// TI DRV5053OA (-11 mV/mT) or DRV5053PA (-23 mV/mT); both were ordered and the
+// one-square prototype decides (hardware/test-log.md). Selects the provisional
+// thresholds through hallPreset(); per-square calibrate() then replaces the
+// centre value. Each sensor gets a 0.01 uF bypass capacitor (datasheet); its
+// output (0.2 V to ~1.8 V) is read at the ADC's 11 dB attenuation.
+constexpr Drv5053 HALL_SENSOR = Drv5053::OA;
 
 // Hall sensors: 4 x CD74HC4067, each common output to one ADC1 pin.
 constexpr uint8_t HALL_ADC[4] = {36, 39, 34, 35};
@@ -56,7 +65,15 @@ constexpr uint8_t STEPPER_EN = 15;
 constexpr uint8_t LIMIT_X = 32;
 constexpr uint8_t LIMIT_Y = 33;
 
-// Electromagnet H-bridge (DRV8871 IN1/IN2 or TB6612 equivalent).
+// Electromagnet H-bridge: Toshiba TB67H450 (single brushed-DC H-bridge,
+// ordered 2026-11-10 instead of DRV8871/TB6612), inputs IN1/IN2 driven by
+// LEDC PWM (see Magnet). Electromagnet: Kyoritsu ZYE1-P25/20 (25 mm dia. x
+// 20 mm, 12 V, 0.33 A per the seller), which heats up when energised
+// continuously; see Magnet::BOOST_MS / HOLD_DUTY.
+// UNVERIFIED (the datasheet could not be fetched): the IN1/IN2 truth table
+// assumed by Magnet (both low = outputs off; IN1 high = one direction, IN2 high
+// = the other) and the maximum input PWM frequency (Magnet uses 20 kHz).
+// Confirm both against the TB67H450 datasheet (hardware/test-log.md).
 constexpr uint8_t MAGNET_IN1 = 18;
 constexpr uint8_t MAGNET_IN2 = 4;
 

@@ -21,6 +21,7 @@ static int parseBoard(const char* s, int8_t out[]) {
   return n;
 }
 
+// Explicit thresholds (not the DRV5053 defaults) for the classify() logic tests.
 static const HallThresholds TH{2048, 300, 150, true};
 
 static void test_classify_thresholds() {
@@ -53,6 +54,67 @@ static void test_classify_hysteresis() {
   TEST_ASSERT_EQUAL_INT(HUMAN, classify(2048 - 300, MACHINE, TH));
   // Opposite pole between exit and enter does not keep the old piece.
   TEST_ASSERT_EQUAL_INT(EMPTY, classify(2048 - 200, MACHINE, TH));
+}
+
+// ADC conversion assumed by the provisional DRV5053 values (HallClassify.h):
+// mV = 142 + counts * 3300/4096.
+static void test_hall_adc_model() {
+  TEST_ASSERT_EQUAL_INT(0, hallcal::countsAtMv(142.0f));
+  TEST_ASSERT_EQUAL_INT(1090, hallcal::countsAtMv(1020.0f));  // DRV5053 VQ typ
+  TEST_ASSERT_EQUAL_INT(82, hallcal::countsForMv(66.0f));     // 6 mT on OA
+  TEST_ASSERT_EQUAL_INT(171, hallcal::countsForMv(138.0f));   // 6 mT on PA
+}
+
+// Field estimate: positive = S pole (output below VQ, negative sensitivity).
+static void test_hall_field_estimate() {
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 6.0f, hallcal::fieldMt(954.0f, 1020.0f, Drv5053::OA));
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, -1.0f, hallcal::fieldMt(1043.0f, 1020.0f, Drv5053::PA));
+  TEST_ASSERT_FLOAT_WITHIN(1e-4f, 0.0f, hallcal::fieldMt(1000.0f, 1000.0f, Drv5053::OA));
+}
+
+static void test_hall_presets() {
+  const HallThresholds oa = hallPreset(Drv5053::OA);
+  TEST_ASSERT_EQUAL_INT(1090, oa.center);
+  TEST_ASSERT_EQUAL_INT(82, oa.enter);  // 6 mT x 11 mV/mT = 66 mV
+  TEST_ASSERT_EQUAL_INT(41, oa.exit);   // 3 mT x 11 mV/mT = 33 mV
+  TEST_ASSERT_FALSE(oa.southHigh);
+  const HallThresholds pa = hallPreset(Drv5053::PA);
+  TEST_ASSERT_EQUAL_INT(1090, pa.center);
+  TEST_ASSERT_EQUAL_INT(171, pa.enter);  // 6 mT x 23 mV/mT = 138 mV
+  TEST_ASSERT_EQUAL_INT(86, pa.exit);    // 3 mT x 23 mV/mT = 69 mV
+  TEST_ASSERT_FALSE(pa.southHigh);
+}
+
+// The struct's defaults are the OA preset (the default variant in Pins.h).
+static void test_hall_defaults_are_oa() {
+  const HallThresholds d;
+  const HallThresholds oa = hallPreset(Drv5053::OA);
+  TEST_ASSERT_EQUAL_INT(oa.center, d.center);
+  TEST_ASSERT_EQUAL_INT(oa.enter, d.enter);
+  TEST_ASSERT_EQUAL_INT(oa.exit, d.exit);
+  TEST_ASSERT_EQUAL(oa.southHigh, d.southHigh);
+}
+
+// Raw reading for a field of mT (positive = S pole) on a DRV5053 at VQ typ.
+static int rawAt(float mT, Drv5053 v) {
+  return hallcal::countsAtMv(hallcal::VQ_MV + mT * hallcal::sensitivity(v));
+}
+
+// With the presets: S (machine) reads below center, N (human) above; 7 mT is
+// past enter (6 mT), 5 mT sits in the hysteresis band, 2 mT is below exit (3 mT).
+static void test_hall_presets_classify() {
+  const Drv5053 variants[] = {Drv5053::OA, Drv5053::PA};
+  for (Drv5053 v : variants) {
+    const HallThresholds t = hallPreset(v);
+    TEST_ASSERT_EQUAL_INT(EMPTY, classify(rawAt(0.0f, v), EMPTY, t));
+    TEST_ASSERT_EQUAL_INT(MACHINE, classify(rawAt(7.0f, v), EMPTY, t));
+    TEST_ASSERT_EQUAL_INT(HUMAN, classify(rawAt(-7.0f, v), EMPTY, t));
+    TEST_ASSERT_EQUAL_INT(EMPTY, classify(rawAt(5.0f, v), EMPTY, t));
+    TEST_ASSERT_EQUAL_INT(MACHINE, classify(rawAt(5.0f, v), MACHINE, t));
+    TEST_ASSERT_EQUAL_INT(HUMAN, classify(rawAt(-5.0f, v), HUMAN, t));
+    TEST_ASSERT_EQUAL_INT(EMPTY, classify(rawAt(2.0f, v), MACHINE, t));
+    TEST_ASSERT_EQUAL_INT(EMPTY, classify(rawAt(-2.0f, v), HUMAN, t));
+  }
 }
 
 static void test_led_index_serpentine() {
@@ -291,6 +353,11 @@ int main(int, char**) {
   RUN_TEST(test_classify_thresholds);
   RUN_TEST(test_classify_south_low);
   RUN_TEST(test_classify_hysteresis);
+  RUN_TEST(test_hall_adc_model);
+  RUN_TEST(test_hall_field_estimate);
+  RUN_TEST(test_hall_presets);
+  RUN_TEST(test_hall_defaults_are_oa);
+  RUN_TEST(test_hall_presets_classify);
   RUN_TEST(test_led_index_serpentine);
   RUN_TEST(test_watch_lift);
   RUN_TEST(test_watch_place_after_200ms);
