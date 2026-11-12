@@ -44,3 +44,27 @@ python python/bench_env.py
 ```
 
 ランダムな方策で、相手ごと・スレッド数ごとの決定点／秒を出す。
+
+## コンパイラのない機械で使う（ビルド済みの wheel）
+
+演習の Azure VM には sudo がなく、g++ や Python のヘッダーがないと上のビルドができない。そのときは、同じ OS と Python（Ubuntu 24.04、Python 3.12）の別の機械で wheel を作って持っていく。作る側（g++ と python3.12-dev がある機械）で:
+
+```bash
+python3.12 -m venv /tmp/v312 && /tmp/v312/bin/pip install pybind11 setuptools wheel numpy
+```
+
+```bash
+cd python && /tmp/v312/bin/python setup.py bdist_wheel -d dist
+```
+
+できた `python/dist/hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl`（glibc 2.38 以上、libstdc++ の GLIBCXX_3.4.29 以上が要る）を VM へ送り、`~/venv` で:
+
+```bash
+python -m pip install hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl pytest
+```
+
+```bash
+HASAMI_ENV_NO_BUILD=1 python -m pytest python --import-mode=importlib
+```
+
+`lib/core` を変えたら wheel を作り直す。
