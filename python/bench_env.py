@@ -7,15 +7,15 @@ counted in the time). One step = n_envs decision points. Prints one row per cond
 """
 
 import argparse
-import glob
 import os
 import sys
+import sysconfig
 import time
 
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-if glob.glob(os.path.join(HERE, "hasami_env", "_core*.so")):
+if os.path.exists(os.path.join(HERE, "hasami_env", "_core" + sysconfig.get_config_var("EXT_SUFFIX"))):
     sys.path.insert(0, HERE)  # the module built in place (setup.py build_ext --inplace)
 else:
     # Not built here: use the installed hasami_env (python/wheels/*.whl), not this source directory.

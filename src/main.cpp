@@ -75,7 +75,7 @@ constexpr UBaseType_t THINK_PRIORITY = 1;
 constexpr BaseType_t THINK_CORE = 0;
 constexpr uint32_t LED_PERIOD_MS = 33;  // ~30 Hz
 
-const Rules rules;
+const Rules rules = officialRules();  // RE + RW + RU40 (Rules.h)
 const Params params;
 Magnet magnet;
 Leds leds;

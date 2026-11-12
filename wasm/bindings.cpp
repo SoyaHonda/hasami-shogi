@@ -192,6 +192,9 @@ val botToVal(const BotParams& b) {
   return o;
 }
 
+// The official rules (officialRules() of Rules.h), as defaults() gives rules.
+val officialRulesVal() { return rulesToVal(officialRules()); }
+
 // {rules, params, bot}: the C++ defaults.
 val defaults() {
   val o = val::object();
@@ -409,5 +412,6 @@ EMSCRIPTEN_BINDINGS(hasami) {
       .function("clockMs", &JsSim::clockMs);
 
   function("defaults", &defaults);
+  function("officialRules", &officialRulesVal);
   function("thinkCase", &thinkCase);
 }

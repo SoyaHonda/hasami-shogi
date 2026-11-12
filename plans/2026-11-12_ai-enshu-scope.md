@@ -4,7 +4,7 @@
 
 ## 1. 決めたこと
 
-- ルール: RE＋RW＋RU40（`edgeCapture = true`、`wallLimit = true`、`untouchedMs = 40000`）。4枚先取、時間切れ10分（`timeLimitMs = 600000`）。学習中は固定する。RU の時間は 11/06計画の所見（RU40 は RU20 より B1 との局が長く、勝率の落ち方も小さい）から 40 秒にした。20 秒と比べるのはこの期間ではやらない。
+- ルール: RE＋RW＋RU40（`edgeCapture = true`、`wallLimit = true`、`untouchedMs = 40000`）。2026-11-12 にこれを正式なルールにした（`officialRules()`、11/06 計画 3.1）。4枚先取、時間切れ10分（`timeLimitMs = 600000`）。学習中は固定する。RU の時間は 11/06計画の所見（RU40 は RU20 より B1 との局が長く、勝率の落ち方も小さい）から 40 秒にした。20 秒と比べるのはこの期間ではやらない。
 - 学習するのは機械側だけ。人間側は環境の中の固定のボット（B1 と Race）が指す。
 - 学習は演習の Azure の VM で回す（2026年度 人工知能演習「Azure GPU マシン 利用手順」2026年11月版による）。1人1台（aiexp-XX）が割り当て済みで、2人で2台。大きさは決まっていて、ポータルからは開始と停止だけができる。Tesla T4（16GB）、Ubuntu 24.04、Python 3.12（`~/venv`）、PyTorch 2.9.1（CUDA 12.6）と numpy が入っている。sudo はない。上限は1人 $1,334.9 で、超えるとアカウントが無効になり中のファイルは取り出せなくなる。連続稼働で1日約17ドル（11/17〜11/30 を止めずに回しても約240ドル）。11月末に回収されるので、結果はその前に git へ push するか手元に落とす。使わないときはポータルから停止し「停止済み (割り当て解除済み)」を確かめる。
 - VM の中身（2026-11-12、aiexp-03 で確認）: 4 vCPU（AMD EPYC 7V12）、Python 3.12.3、numpy 2.5.4、PyTorch 2.9.1+cu126（`torch.cuda.is_available()` は真）。g++ も Python.h もなく、sudo もないので、hasami_env は VM ではビルドできない。同じ Ubuntu 24.04・Python 3.12 でビルドした wheel（`python/wheels/`）を入れて使う（手順は `python/README.md`）。VM でテスト 11 件が通った。C++ を変えたら wheel を作り直す（古い wheel は `test_build_matches_sources` で落ちる）。TA に build-essential と python3-dev を入れてもらえれば、VM でもその場でビルドできる。

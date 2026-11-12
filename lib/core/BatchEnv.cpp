@@ -4,9 +4,7 @@
 
 EnvConfig envConfig(EnvOpponent opponent, float speedScale, Level level) {
   EnvConfig c;
-  c.rules.edgeCapture = true;
-  c.rules.wallLimit = true;
-  c.rules.untouchedMs = 40000;
+  c.rules = officialRules();
   c.params.level = level;
   c.params.freeSpeed *= speedScale;
   c.params.dragSpeed *= speedScale;

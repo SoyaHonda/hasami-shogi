@@ -67,6 +67,15 @@ void test_speed_scale_config() {
   TEST_ASSERT_EQUAL_INT(70, slow.speedScale100);
   TEST_ASSERT_TRUE(slow.rules.edgeCapture && slow.rules.wallLimit);
   TEST_ASSERT_EQUAL_UINT32(40000, slow.rules.untouchedMs);
+  // The environment plays the official rules; Rules() stays R0.
+  const Rules official = officialRules();
+  TEST_ASSERT_TRUE(official.edgeCapture && official.wallLimit);
+  TEST_ASSERT_EQUAL_UINT32(40000, official.untouchedMs);
+  TEST_ASSERT_TRUE(slow.rules.edgeCapture == official.edgeCapture && slow.rules.wallLimit == official.wallLimit);
+  TEST_ASSERT_EQUAL_UINT32(official.untouchedMs, slow.rules.untouchedMs);
+  TEST_ASSERT_EQUAL_UINT32(official.timeLimitMs, slow.rules.timeLimitMs);
+  TEST_ASSERT_EQUAL_INT(official.target, slow.rules.target);
+  TEST_ASSERT_FALSE(Rules().edgeCapture || Rules().wallLimit || Rules().untouchedMs > 0);
   TEST_ASSERT_EQUAL_UINT32(600000, slow.rules.timeLimitMs);
   TEST_ASSERT_EQUAL_INT(4, slow.rules.target);
   TEST_ASSERT_EQUAL_UINT32(1000, fast.bot.reactMs);

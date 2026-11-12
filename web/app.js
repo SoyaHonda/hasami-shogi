@@ -12,7 +12,7 @@ const boardEl = $('board'), cellsEl = $('cells'), layerEl = $('layer'), overlayE
 
 // Settings start from the C++ defaults (no second copy of them here).
 const D = m.defaults();
-const rules = { ...D.rules };
+const rules = m.officialRules(); // RE + RW + RU40; each can be turned off below
 const params = { ...D.params };
 const sim = new m.SimDriver(rules, params, (Date.now() >>> 0) || 1);
 
@@ -507,7 +507,8 @@ $('diff').oninput = (e) => {
 
 // Rule candidates (plan 2026-11-06 3.1): from the next game, like the other rules.
 // RU: on/off plus its duration (the slider, 20-90 s; it keeps its value while RU is off and starts
-// from the input's value="40" unless the C++ default turns RU on).
+// from the input's value="40" unless the rules turn RU on: the official rules (officialRules()) do,
+// at 40 s).
 let ruSec = rules.untouchedMs > 0 ? rules.untouchedMs / 1000 : parseFloat($('ruSec').value);
 function showRuleCandidates() {
   $('ruleEdge').checked = rules.edgeCapture;

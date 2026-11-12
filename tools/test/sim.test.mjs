@@ -24,6 +24,10 @@ function startPlay(sim) {
   assert.equal(sim.phase(), m.Phase.Play);
 }
 
+test('officialRules() is the defaults with RE, RW and RU40 on', () => {
+  assert.deepEqual(m.officialRules(), { ...m.defaults().rules, edgeCapture: true, wallLimit: true, untouchedMs: 40000 });
+});
+
 test('defaults() returns the C++ defaults', () => {
   const d = m.defaults();
   assert.deepEqual(d.rules, {
