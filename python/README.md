@@ -37,6 +37,10 @@ obs, scal, mask, reward, dt_ms, done, info = env.step(actions)
 
 `lib/core` を変えたら、`pip install -e` の場合も入れ直すか `build_ext --inplace` をやり直す。
 
+## 学習のひな形（python/train）
+
+`model.py`（ネットワーク）、`ppo.py`（PPO の学習）、`evaluate.py`（今の読みとの比較、200 局）、`plot_curve.py`（学習曲線）、`record_game.py`（1 局の GIF）。PyTorch が要るので、演習の VM で使う。`python/tests/test_train.py` は PyTorch があるときだけ動き（ないときはスキップ）、小さな設定で学習・評価・曲線・録画を一通り回す。手順は学習担当マニュアル（Claude Docs）にある。
+
 ## 速さ
 
 ```bash

@@ -17,6 +17,7 @@
 
 - 本田: `lib/core/BatchEnv.h/.cpp`、`lib/core/Features.h/.cpp`、`python/hasami_env/`（pybind11）、`test/test_env/`、`python/tests/test_env.py`。
 - 相方: `python/train/model.py`、`python/train/ppo.py`、`python/train/evaluate.py`、`python/train/mock_env.py`（BatchEnv と同じ配列を返すだけの仮の環境）。BatchEnv ができるまではモックで開発し、できたら差し替える。
+- （11/12 追記）`python/train/` に、そのまま動くひな形（model、ppo、evaluate、plot_curve、record_game）を置いた。相方はこれで学習と評価を回し、必要に応じて直す。`python/tests/test_train.py` は PyTorch のある VM でだけ動く（クラウドの開発環境と CI では PyTorch がないのでスキップ）。
 
 ## 4. 環境の約束（Python から見た形）
 
