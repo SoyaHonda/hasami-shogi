@@ -138,7 +138,11 @@ def test_automatic_reset():
             w = info["winner"][i]
             cm, ch = info["captures"][i]
             assert w in (0, 1, 2)
-            assert (w == 2) == (cm >= 4) and (w == 1) == (ch >= 4)
+            # Four captures win, or more captures than the other side at the time limit.
+            if info["game_ms"][i] < 600000:
+                assert (w == 2) == (cm >= 4) and (w == 1) == (ch >= 4)
+            else:
+                assert w == (2 if cm > ch else 1 if ch > cm else 0)
             # The whole game's reward: +-1, 0.2 per piece of difference, less the draw penalty.
             result = {0: 0.0, 1: -1.0, 2: 1.0}[int(w)]
             expected = result + 0.2 * (int(cm) - int(ch))

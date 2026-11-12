@@ -220,8 +220,12 @@ void test_auto_reset() {
     TEST_ASSERT_TRUE(st.dtMs > 0);
     if (!st.done) continue;
     TEST_ASSERT_TRUE(st.info.winner == 1 || st.info.winner == 2 || st.info.winner == 0);
-    if (st.info.winner == 2) TEST_ASSERT_TRUE(st.info.capturedMachine >= 4);
-    if (st.info.winner == 1) TEST_ASSERT_TRUE(st.info.capturedHuman >= 4);
+    // Four captures win, or more captures than the other side at the time limit.
+    const bool limit = st.info.clockMs >= 600000;
+    if (st.info.winner == 2)
+      TEST_ASSERT_TRUE(st.info.capturedMachine >= 4 || (limit && st.info.capturedMachine > st.info.capturedHuman));
+    if (st.info.winner == 1)
+      TEST_ASSERT_TRUE(st.info.capturedHuman >= 4 || (limit && st.info.capturedHuman > st.info.capturedMachine));
     // The whole game's reward: the result and 0.2 per piece of difference, less the draw penalty.
     const float result = st.info.winner == 2 ? 1.0f : st.info.winner == 1 ? -1.0f : 0.0f;
     const float caps = 0.2f * static_cast<float>(st.info.capturedMachine - st.info.capturedHuman);
