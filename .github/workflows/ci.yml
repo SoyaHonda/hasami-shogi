@@ -15,6 +15,19 @@ jobs:
       - name: Unit tests (native)
         run: pio test -e native
 
+  # The learning environment (plan 2026-11-12 section 4): python/conftest.py builds hasami_env.
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Install requirements
+        run: pip install -r python/requirements.txt
+      - name: Python tests
+        run: python -m pytest python
+
   firmware:
     runs-on: ubuntu-latest
     steps:

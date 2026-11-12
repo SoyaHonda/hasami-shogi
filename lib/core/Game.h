@@ -144,6 +144,10 @@ class Game {
   Sq pendingCell() const;
   // Pieces put back by the hold limit since reset().
   int holdTimeouts() const { return holdTimeouts_; }
+  // Whether a human placement has landed since reset(), and its game clock (the next placement
+  // lands no earlier than lastPlaceMs() + Rules::humanIntervalMs).
+  bool hasLastPlace() const { return hasLastPlace_; }
+  uint32_t lastPlaceMs() const { return lastPlaceClock_; }
   // Whether `side` (HUMAN or MACHINE) has made its opening move (RW); always true without RW.
   bool openingDone(int8_t side) const { return openingDone_[side == HUMAN ? HUMAN : MACHINE]; }
   // Squares of the pieces on the board not moved to another square for Rules::untouchedMs (RU);

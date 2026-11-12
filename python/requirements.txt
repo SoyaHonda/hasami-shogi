@@ -1,0 +1,7 @@
+# Building and testing the environment (python -m pytest python). Tested with Python 3.13.18,
+# numpy 2.5.3, pybind11 3.1.0, pytest 9.2.0 and setuptools as below; the lower bounds leave room
+# for the Python of the training machine (PyTorch is installed separately, CUDA build).
+numpy>=1.24
+pybind11>=2.12
+pytest>=8.0
+setuptools>=68
