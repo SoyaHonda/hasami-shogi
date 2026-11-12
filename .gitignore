@@ -1,0 +1,10 @@
+.pio/
+node_modules/
+web/hasami.js
+src/golden_cases.h
+build/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+python/hasami_env/*.so
+python/dist/

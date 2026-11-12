@@ -18,13 +18,13 @@
 
 ## 3. 仕様（ロジックが満たすこと）
 
-ルール: 7×7（`Rules::n` で9まで可）、各7枚、人間は最下段、機械は最上段。縦横に何マスでも、飛び越えなし。動いた側だけがはさみ判定をする（自分から入った駒は取られない）。一直線に並んだ複数枚はまとめて取る。盤端に達する列は取らない。隅の囲み取りはなし。駒ごとのクールダウン（人間3秒、機械1秒）。人間は持ち上げて置き、元のマスに戻すと取り消し（クールダウンなし）。持ち上げ中の駒は盤上にないものとして扱い、はさまれない。持ち上げ中は最大2枚。取りが起きたら Removing に入り、機械が取られた駒を全部盤外へ運び終えたら Countdown（1秒）を経て Play に戻る。4枚先取（`diffOn` で枚数差の勝ちも可）。勝負が決まった取りでは運び出さずに Over。ゲーム時計は Play 中だけ進み、クールダウンもこの時計で測る。ジョブ中に取りが起きたら、引いている途中の1マスだけ引き終えてジョブを打ち切り（到着処理はしない、確保は解く）、運び出しに移る。引いていた駒が取られた場合は、引き終えたマスから運び出す。
+ルール: 7×7（`Rules::n` で9まで可）、各7枚、人間は最下段、機械は最上段。縦横に何マスでも、飛び越えなし。動いた側だけがはさみ判定をする（自分から入った駒は取られない）。一直線に並んだ複数枚はまとめて取る。盤端に達する列は取らない。隅の囲み取りはなし。駒ごとのクールダウン（人間3秒、機械1秒）。人間は持ち上げて置き、元のマスに戻すと取り消し（クールダウンなし）。持ち上げ中の駒は盤上にないものとして扱い、はさまれない。機械が引いている途中の駒も同じく盤上にないものとして扱い、はさまれない（2026-10-31 変更）。持ち上げられる駒の数、置く間隔（早すぎた置きの保留）、持ち上げの上限、持ち上げ中の元のマスと保留先に機械が入れないこと、10分の時間切れの勝敗（取った枚数の多いほうの勝ち、同じなら引き分け）は `plans/2026-10-31_ai-time-race.md` の 3.1 による（2026-11-02 変更。以前は持ち上げ中は最大2枚）。取りが起きたら Removing に入り、機械が取られた駒を全部盤外へ運び終えたら Countdown（1秒）を経て Play に戻る。4枚先取（`diffOn` で枚数差の勝ちも可）。勝負が決まった取りでは運び出さずに Over。ゲーム時計は Play 中だけ進み、クールダウンもこの時計で測る。ジョブ中に取りが起きたら、引いている途中の1マスだけ引き終えてジョブを打ち切り（到着処理はしない、確保は解く。駒が1マスも動いていなければクールダウンも付けない。2026-10-31 変更）、運び出しに移る。取られた駒は、奥（行 −1）と手前（行 n）の置き場のうち経路が短いほうへ運ぶ（同じなら近い辺、それも同じならその駒の側。2026-10-31 変更）。
 
 機械の移動: 一度に一つのジョブだけ。ジョブは、ヘッドを駒の下へ空送り（速度 `freeSpeed`、マスの境目に沿う折れ線。経路は `Path.h` の `travelPath` で決め、実物と仮想のステージで共通）→ 吸着（`engageMs`）→ 1マスずつ引く（速度 `dragSpeed`）。次のマスへ入る前に空きを確かめて確保し、確保したマスには人間は置けない。行く手が埋まったら手前で止まり、止まったマスで到着処理（はさみ判定）をする。
 
 運び出し: 取られた駒ごとに、空きマスの中心だけを通る経路を幅優先探索で探し、人間の駒は手前の置き場（行 n）、機械の駒は奥の置き場（行 −1）の空いた位置へ運ぶ。人間の駒を運ぶときは電磁石の向きを反転する。経路がない駒しか残っていなければ、その駒を `stuck` として Paused にし、人が手で置き場へ移したことを `onManualRemoval` で受けて続ける。
 
-機械の読み: 旧シミュレータと同じ点数式。候補は、クールダウンが終わっている機械の駒の合法手すべてと「動かない」。点数 = 取れる枚数×100 + 評価 − 所要時間×4 − 2（動かないときは評価のみ）。評価 = −危険度×80×(1−0.5×攻め気) + 圧力×(20+60×攻め気) + 攻め気×(隣接数×8 + 前進度×30)。危険度は人間の駒が次の一手で取れる枚数の最大値＋0.25×合計で、持ち上げ中の駒は重み1.6（`readLift` が真のとき）、ほかの駒は強さで決める（Easy 0、Normal 動かせる駒0.35、Hard 動かせる駒1.0・残り1.5秒以内0.7）。圧力は、機械の駒（クールダウンを問わない）が次の一手で取れる枚数の最大値。所要時間 = ヘッドから駒までの直線距離/空送り速度 + 吸着 + 引く距離/引く速度（旧版と同じ見積もり）。駒は id 順、行き先は下・上・右・左の順に調べ、`s > best + 0.01` のときだけ更新する。計算は float で、距離は `sqrtf` で求める（`hypotf` はライブラリごとに結果が違いうる）。読むタイミングは、前回から `max(150, reactMs)` 経ったとき、または `readLift` が真で人間が駒を持ち上げてから `reactMs` 経ったとき（早い方）。ジョブ中と、読みの結果を待っている間は読まない。
+機械の読み: `plans/2026-10-31_ai-time-race.md` の 3.3〜3.11（人間が挟み終える時間と機械が避け始める時間の比較、ヘッドの順番、攻め、手の選び方、強さ）による（2026-11-02 変更。以前は旧シミュレータの点数式）。読むタイミングは、前回から `max(150, reactMs)` 経ったとき、または `readLift` が真で人間が駒を持ち上げてから `reactMs` 経ったとき（早い方）。ジョブ中と、読みの結果を待っている間は読まない。
 
 ## 4. リポジトリ構成
 
@@ -110,12 +110,7 @@ Snapshot snapshot(float headR, float headC) const;      // Ai へ渡す写し
 
 ### 5.3 Ai
 
-```cpp
-struct Snapshot { Board board; /* 持ち上げ中を除く */ PieceView pieces[2*MAX_N]; int count;
-  uint32_t clockMs; float headR, headC; int heldIds[2]; int heldCount; };
-struct AiMove { bool none; int pieceId; int toR, toC; float score; };
-AiMove think(const Snapshot&, const Params&);
-```
+`think(const Snapshot&, const Params&)` は Snapshot だけを読む純粋関数のまま。Snapshot、`AiDebug`、`RaceTime` の形は `plans/2026-10-31_ai-time-race.md` の 3.3〜3.10 と5章による（2026-11-02 変更。以前は持ち上げ中の駒を最大2枚持つ形）。
 
 ### 5.4 IGantry と MachineController
 
@@ -142,20 +137,7 @@ class MachineController { public:
 
 ### 5.5 SimDriver と HumanBot
 
-```cpp
-class SimDriver { public:
-  SimDriver(const Rules&, const Params&, uint32_t seed);
-  void setParams(const Params&); void setRules(const Rules&); // Rules は次の reset で反映
-  void reset(); void start(); void togglePause();
-  void advance(uint32_t dtMs);                   // 時刻を進め、機械は同じスレッドで think
-  LiftResult lift(int r, int c); PlaceResult place(int r, int c);
-  void enableBot(const BotParams&);              // 人間側をボットにする（自動対戦）
-  State state() const;                           // 画面用: 盤、駒、ヘッド、ジョブ、LEDの色、時計、取った数、先回り成功数
-};
-struct BotParams { uint32_t reactMs = 400, holdMs = 600; float greed = 0.8f; };
-```
-
-`HumanBot` は動かせる駒からランダムに1枚を選んで持ち上げ（`reactMs` 後）、`holdMs` だけ持ってから、取れる行き先があれば確率 `greed` でその手、なければ合法手から乱数で選んで置く（合法手がなければ取り消すか、5.2の逃げ道）。種が同じなら同じ対局になる。運び出しが `stuck` で Paused になったら、`SimDriver` は人が手で移した扱いで `onManualRemoval` を呼ぶ（シミュレータと自動対戦が止まらないように）。
+`SimDriver` は時刻を進めて機械を同じスレッドで読ませ、`lift`・`place`（`PlaceResult::Pending` を含む）、`enableBot`、`state()` を公開する。`HumanBot` と `BotParams`（`style` の Random、Trap、Race、Race3、新しいルールへの対応、手の時間のばらつき）は `plans/2026-10-31_ai-time-race.md` の 3.12 による（2026-11-02 変更）。運び出しが `stuck` で Paused になったら、`SimDriver` は人が手で移した扱いで `onManualRemoval` を呼ぶ。
 
 先回り成功数: 持ち上げた時点でその駒に取れる行き先があり、持ち上げ中に機械がジョブを始め、置いた結果取れなかった回数。
 
@@ -171,17 +153,17 @@ struct BotParams { uint32_t reactMs = 400, holdMs = 600; float greed = 0.8f; };
 
 ### 5.8 Node.jsの自動対戦
 
-`tools/autoplay.mjs --games 500 --level easy,normal,hard --hcd 2,3,4 --seed 1` のように条件の組を受け、`advance(10)` の固定刻みで最後まで（ゲーム時計が `--max-min`、既定10分を超えたら引き分けとして打ち切り）回し、条件ごとに引き分けの数、機械の勝率、平均の対局時間、先回り成功数の平均を表で出す（`--csv` でCSV）。
+`tools/autoplay.mjs` の条件、指標、作り直し前との対の比較（`--bot`、`--baseline-out`／`--baseline`）、打ち切り（Game の10分の時間切れ）は `plans/2026-10-31_ai-time-race.md` の 3.13 による（2026-11-02 変更）。
 
 ### 5.9 ファーム
 
 - `lib/hw/HallScanner`: 49マスを100Hzで走査し、`HallClassify` で判定、2回連続で同じなら採用。電磁石の通電中はヘッドのいるマス（0.75マス以内）だけ直前の判定を保持。
 - `lib/hwpure/BoardWatcher`: 判定済みの盤面の変化を、人間の持ち上げ（人間の駒が消えた）、置き（同じマスに200ms続いた）、機械の駒への接触（機械が動かしていないS極の変化）、初期配置との違いのイベントに変える。
 - `lib/hw/Gantry`: `IGantry` の実装。FastAccelStepper（パルスはハードウェアが出す）、80 step/mm（GT2、20歯、1/16）、原点出し、行 −1〜n の範囲。
-- `lib/hw/Magnet`: Hブリッジの2本のPWMで `MagnetMode` を実現。
+- `lib/hw/Magnet`: Hブリッジの2本のPWMで `MagnetMode` を実現。2026-11-10: Hブリッジは TB67H450（真理値表と PWM の最大周波数は未確認）。発熱を抑えるため、Pull に切り替えた直後は全デューティで `BOOST_MS`（仮300ms）、そのあと保持デューティ（`HOLD_DUTY`、測るまでは255で下げない）にする。`update(now)` をループで呼ぶ。連続通電の時間と合計の通電時間を数える。
 - `lib/hw/Leds`: `LedIndex` と `LedPlan` の結果をFastLEDへ。上限1.5A。
 - `src/main.cpp`: コア1で走査→`BoardWatcher`→`Game`・`MachineController`→`Gantry::update`→LED（30Hz）。`wantsThink` で写しをキューでコア0へ送り、コア0の `think` の結果をキューで受けて `onThinkResult`。シリアルコマンド（`scan`、`cal`、`home`、`mv`、`pull`、`ai`、`cd`）。
-- `src/rig/rig_main.cpp`: 1マス試作の測定（`pull v a`、`hall`、`pass d`、`led b`）。
+- `src/rig/rig_main.cpp`: 1マス試作の測定（`pull v a`、`hall`、`pass d`、`led b`）。2026-11-10: `hall` は生の値に加えて mV と DRV5053 の OA・PA それぞれで見積もった mT を出す。`cal`（センサの中心値と磁場ゼロの mV）、`heat s d`（デューティ d で s 秒通電、コイルの温度を測る）、`hold d`（保持デューティを変えて `pull` を試す）を追加。センサの品番（OA・PA）は `Pins.h` の `HALL_SENSOR` で切り替え、`HallClassify` の `hallPreset` が仮のしきい値を出す。
 - ピン割り当ては制作計画に表がないので、支給のESP32を確かめてから `Pins.h` の一か所で決める（ホールセンサはADC1、WROVERなら16/17は使わない）。A4988はMS1〜3をHigh、RESETとSLEEPを接続。
 
 ### 5.10 CI（`.github/workflows/ci.yml`）
@@ -303,7 +285,7 @@ path: 空きマスだけを通る（障害のある盤で経路の全マスが�
 `onHumanLift`: Play 以外は NotPlaying、人間の駒でなければ NotHumanPiece、クールダウン中は InCooldown、すでに2枚なら TooMany。InCooldown と TooMany は反則として記録する。
 `onHumanPlace`: Play 以外なら `PlaceResult::NotPlaying`（列挙に足す）。対応付けは5.2のとおり（元のマスなら取り消し、合法な駒が複数なら元のマスが近い方、同じなら id の小さい方、確保中のマスは Illegal、どれも不合法なら Illegal として反則を記録し状態を変えない）。元のマスが埋まり（機械が入った等）合法な行き先もない駒は、どの空きマスにも置ける。置いたら人間のクールダウンを付け、人間側のはさみ判定をする。
 機械側: `machineCanEnter` は空きで確保されていなければ確保して true（持ち上げ中の駒の元のマスは空きとみなす）。`onMachineStep` は駒をそのマスへ動かし確保を解く。Removing 中でも呼べて、取られた駒なら運び出しの元のマスを更新する。`onMachineArrive` は機械のクールダウンを付け、機械側のはさみ判定。`void onMachineAbort(int pieceId, uint32_t now)` を足し、ジョブ打ち切りで確保を解きクールダウンを付ける（到着処理はしない）。
-取り: 取られた駒を `alive=false` にし、取った数を足す。勝負が決まれば Over（運び出しなし）、そうでなければ Removing に入り、取られた駒を運び出し待ちに積む。`removals` は運び出し待ちの駒ごとに id、元のマス、置き場の行（人間の駒は n、機械の駒は −1）と、`pickReserveSlot` で仮に選んだ列を返す。Game は置き場の使用状況 `reserveUsed(int8_t side)` を持つ。`onRemoved(pieceId, slotC)` と `onManualRemoval(pieceId)` で運び出し済みにし、全部終われば Countdown（`resumeCountdownMs`）へ。`void onRemovalStuck(int pieceId, uint32_t now)` を足し、Paused にして `stuckId()` を立てる。`stuckId` が立っている間は `togglePause` で再開しない。
+取り: 取られた駒を `alive=false` にし、取った数を足す。勝負が決まれば Over（運び出しなし）、そうでなければ Removing に入り、取られた駒を運び出し待ちに積む。`removals` は運び出し待ちの駒ごとに id、元のマス、置き場の行（近い辺の行、同じならその駒の側）と、`pickReserveSlot` で仮に選んだ列を返す。Game は置き場の行ごとの使用状況 `reserveUsed(int toRow)` を持ち、両者で共有する。`onRemoved(pieceId, toRow, slotC)` と `onManualRemoval(pieceId)` で運び出し済みにし、全部終われば Countdown（`resumeCountdownMs`）へ。`void onRemovalStuck(int pieceId, uint32_t now)` を足し、Paused にして `stuckId()` を立てる。`stuckId` が立っている間は `togglePause` で再開しない。
 反則: `void reportViolation(int r, int c, uint32_t now)` と `lastViolation()`（マスとゲーム時計でなく `now` の時刻）を持つ。
 読み出し: `phase()`、`winner()`、`clockMs()`、`captured(side)`、`pieces()`、`heldIds()`、`reservedCell()`、`boardWithoutHeld()`、`boardWithReserve()`、`snapshot(headR, headC)`。
 
@@ -318,7 +300,7 @@ path: 空きマスだけを通る（障害のある盤で経路の全マスが�
 
 **Do**:
 先に `test/test_ai/test_main.cpp` と `test/test_machine/test_main.cpp` を書く。
-`Ai.cpp`: 旧版 `think` を3章の式どおり移植する。危険度の重み（Easy 0、Normal 動かせる駒0.35、Hard 動かせる駒1.0・残り1.5秒以内0.7、持ち上げ中は `readLift` のとき1.6）、圧力、形（隣接×8＋前進度×30、前進度は機械の駒の `r/(n−1)` の和）、所要時間（ヘッドから駒までの直線距離 `sqrtf(dr*dr+dc*dc)`/`freeSpeed` ＋ `engageMs/1000` ＋ マス数/`dragSpeed`）、点数（取り×100＋評価−所要時間×4−2、動かないときは評価のみ）。すべて float、`hypotf` は使わない。駒は id 順、行き先は `dests` の順、`s > best + 0.01f` のときだけ更新。何も選ばなければ `none = true`。
+`Ai.cpp`: 旧版 `think` を3章の式どおり移植する。危険度の重み（Easy 0、Normal 動かせる駒0.35、Hard 動かせる駒1.0・残り1.5秒以内0.7・それより長いクールダウン中0.35、持ち上げ中は `readLift` のとき1.6。2手の危険度は3章のとおり）、圧力、形（隣接×8＋前進度×30、前進度は機械の駒の `r/(n−1)` の和）、所要時間（ヘッドから駒までの直線距離 `sqrtf(dr*dr+dc*dc)`/`freeSpeed` ＋ `engageMs/1000` ＋ マス数/`dragSpeed`）、点数（取り×100＋評価−所要時間×4−2、動かないときは評価のみ）。すべて float、`hypotf` は使わない。駒は id 順、行き先は `dests` の順、`s > best + 0.01f` のときだけ更新。何も選ばなければ `none = true`。
 `IGantry.h` は5.4のとおり。
 `VirtualGantry`: コンストラクタで `Params` を受ける。`travelTo` は `travelPath` の折れ線を長さ/`freeSpeed` 秒で等速にたどり、`dragTo` は1マスを 1/`dragSpeed` 秒で直線補間する（置き場の行 −1 と n へも引ける）。`update(now)` で位置を進め、着いたら `idle()`。`magnet` は現在のモードを覚えるだけ（テスト用に `magnetMode()` を公開）。
 `MachineController`: 5.4のメソッドを実装する。読むタイミングはゲーム時計で測り、前回の読みから `max(150, reactMs)`、または `readLift` が真で直近の持ち上げから `reactMs` の早い方。Play でないとき、ジョブ中、結果待ちの間は偽。Countdown から Play に戻ったら、前回の読みを今に置き直す（旧版と同じく `reactMs` 後に最初の読み）。`onThinkResult` は結果待ちを解き、駒が生きていてクールダウンが終わり、今の盤で行き先が合法なときだけジョブを始める（不合法なら捨てる）。
@@ -328,7 +310,7 @@ path: 空きマスだけを通る（障害のある盤で経路の全マスが�
 
 **Test**:
 ai: 取れる手を選ぶ、Easy＋readLift で持ち上げた駒の狙いをふさぐか逃げる（選んだ手のあとの危険度が0）、readLift=false＋Easy＋aggression=0 で `none`、同点ならヘッドに近い駒を選ぶ。
-machine（`VirtualGantry` を使う）: 空送り・吸着・1マス引くの各段階の所要時間が `Params` どおり（±1刻み）、運び出しで人間の駒は `PullHuman`・機械の駒は `PullMachine`、`wantsThink` がジョブ中と結果待ちの間は偽、持ち上げから `reactMs` で真（readLift=false では早まらない）、不合法になった読みの結果を捨てる、引いている途中の取りでジョブを打ち切って運び出す（引いていた駒が取られた場合は引き終えたマスから運ぶ）、経路なしで Paused になり `onManualRemoval` で Countdown へ。
+machine（`VirtualGantry` を使う）: 空送り・吸着・1マス引くの各段階の所要時間が `Params` どおり（±1刻み）、運び出しで人間の駒は `PullHuman`・機械の駒は `PullMachine`、`wantsThink` がジョブ中と結果待ちの間は偽、持ち上げから `reactMs` で真（readLift=false では早まらない）、不合法になった読みの結果を捨てる、引いている途中の取りでジョブを打ち切って運び出す（引いている途中の駒ははさまれない）、経路なしで Paused になり `onManualRemoval` で Countdown へ。
 
 **Verify**: `pio test -e native` で test_ai と test_machine を含む全件が通る。
 
