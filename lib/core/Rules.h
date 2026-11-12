@@ -26,7 +26,18 @@ struct Rules {
   // (a wall), and the start countdown leads to Phase::Opening: each side moves one piece to
   // another square, then Play (the game clock stays stopped until then).
   bool wallLimit = false;
-  // RU (fallback): a piece not moved to another square for this long (game clock) is captured
-  // when one enemy piece arrives next to it. 0 = off; candidates 20000 and 40000.
+  // RU: a piece not moved to another square for this long (game clock) is captured when one
+  // enemy piece arrives next to it. 0 = off; candidates 20000 and 40000.
   uint32_t untouchedMs = 0;
 };
+
+// The official rules (user decision 2026-11-12, plan 2026-11-06 3.1): RE + RW + RU40. The firmware,
+// the web simulator (officialRules() of the WASM module) and the learning environment play them.
+// Rules() itself stays R0, the rules the golden tables and most tests are written for.
+inline Rules officialRules() {
+  Rules r;
+  r.edgeCapture = true;
+  r.wallLimit = true;
+  r.untouchedMs = 40000;
+  return r;
+}

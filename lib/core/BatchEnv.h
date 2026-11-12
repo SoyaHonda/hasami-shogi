@@ -46,7 +46,8 @@ struct EnvConfig {
   uint32_t maxSimMs = 3u * 600000u + 60000u;
 };
 
-// The configuration of plan 2026-11-12: rules RE + RW + RU40, 4 to win, 10 min; the opponent
+// The configuration of plan 2026-11-12: the official rules (officialRules(): RE + RW + RU40, 4 to
+// win, 10 min); the opponent
 // (B1: Race with 1-3 s thinking and threats missed with probability 0.3, as tools/autoplay.mjs);
 // speed_scale multiplies freeSpeed and dragSpeed and divides engageMs (a faster machine engages
 // sooner); `level` is the machine level the bot reads the machine with (and the read's level).

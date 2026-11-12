@@ -7,7 +7,6 @@ environment (python/wheels/*.whl) is tested; test_build_matches_sources then fai
 older than the sources.
 """
 
-import glob
 import os
 import shutil
 import subprocess
@@ -28,8 +27,8 @@ if BUILD:
     subprocess.run([sys.executable, os.path.join(HERE, "setup.py"), "-q", "build_ext", "--inplace"], cwd=HERE, check=True)
     if HERE not in sys.path:
         sys.path.insert(0, HERE)
-elif not glob.glob(os.path.join(HERE, "hasami_env", "_core*.so")):
-    # No module built here: the source directory must not hide the installed hasami_env.
+elif not os.path.exists(os.path.join(HERE, "hasami_env", "_core" + sysconfig.get_config_var("EXT_SUFFIX"))):
+    # No module built here for this Python: the source directory must not hide the installed one.
     sys.path[:] = [p for p in sys.path if os.path.abspath(p or os.curdir) != HERE]
 
 
