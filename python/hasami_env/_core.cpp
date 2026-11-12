@@ -12,6 +12,11 @@
 
 namespace py = pybind11;
 
+// Hash of the C++ sources (hasami_env/srchash.py), set by setup.py.
+#ifndef HASAMI_SOURCE_HASH
+#define HASAMI_SOURCE_HASH "unknown"
+#endif
+
 namespace {
 
 EnvOpponent opponentOf(const std::string& s) {
@@ -226,6 +231,7 @@ PYBIND11_MODULE(_core, m) {
   m.attr("N_CHANNELS") = FEAT_CHANNELS;
   m.attr("BOARD") = FEAT_N;
   m.attr("N_SCALARS") = FEAT_SCALARS;
+  m.attr("SOURCE_HASH") = HASAMI_SOURCE_HASH;
   py::class_<PyBatchEnv>(m, "BatchEnv")
       .def(py::init<int, uint32_t, const std::string&, double, const std::string&, double, int, bool, int>(),
            py::arg("n_envs") = 256, py::arg("seed") = 1, py::arg("opponent") = "b1", py::arg("speed_scale") = 1.0,

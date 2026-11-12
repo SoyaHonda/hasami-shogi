@@ -45,26 +45,32 @@ python python/bench_env.py
 
 ランダムな方策で、相手ごと・スレッド数ごとの決定点／秒を出す。
 
-## コンパイラのない機械で使う（ビルド済みの wheel）
+## コンパイラのない機械で使う（演習の Azure VM）
 
-演習の Azure VM には sudo がなく、g++ や Python のヘッダーがないと上のビルドができない。そのときは、同じ OS と Python（Ubuntu 24.04、Python 3.12）の別の機械で wheel を作って持っていく。作る側（g++ と python3.12-dev がある機械）で:
+演習の VM（aiexp-XX）には g++ も Python.h もなく、sudo もないので、その場ではビルドできない（2026-11-12 に aiexp-03 で確認）。そこで、同じ Ubuntu 24.04・Python 3.12 でビルドした wheel を `python/wheels/` に置いてある。VM では、`~/venv` を有効にしたうえで、リポジトリの根で:
+
+```bash
+git pull
+```
+
+```bash
+python -m pip install -r python/requirements.txt && python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl
+```
+
+```bash
+python -m pytest python -q
+```
+
+コンパイラか Python.h がなければ、`python/conftest.py` はビルドせず、入れた wheel をテストする（`HASAMI_ENV_NO_BUILD=1` でも同じ）。`test_build_matches_sources` は、wheel に埋め込んだソースのハッシュ（`hasami_env.SOURCE_HASH`）が checkout の `lib/core` と `_core.cpp` と同じかを確かめるので、C++ を変えたのに wheel を作り直していなければ落ちる。VM で学習のスクリプトを動かすときは、`PYTHONPATH` に `python/` を入れない（ソースのディレクトリが入れた wheel を隠す）。
+
+wheel の作り直し（g++ と python3.12-dev がある Ubuntu 24.04 で。クラウドの開発環境でよい）:
 
 ```bash
 python3.12 -m venv /tmp/v312 && /tmp/v312/bin/pip install pybind11 setuptools wheel numpy
 ```
 
 ```bash
-cd python && /tmp/v312/bin/python setup.py bdist_wheel -d dist
+cd python && rm -f wheels/*.whl && /tmp/v312/bin/python setup.py -q bdist_wheel -d wheels
 ```
 
-できた `python/dist/hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl`（glibc 2.38 以上、libstdc++ の GLIBCXX_3.4.29 以上が要る）を VM へ送り、`~/venv` で:
-
-```bash
-python -m pip install hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl pytest
-```
-
-```bash
-HASAMI_ENV_NO_BUILD=1 python -m pytest python --import-mode=importlib
-```
-
-`lib/core` を変えたら wheel を作り直す。
+wheel には glibc 2.38 以上と libstdc++ の GLIBCXX_3.4.29 以上が要る（Ubuntu 24.04 は満たす）。

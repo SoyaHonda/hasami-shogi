@@ -18,9 +18,10 @@ of read_actions), capture_reward (0.2 per piece of capture difference), n_thread
 CPU), track_activity (True), tick_ms (10). env.read_actions(level=None) returns the actions the
 hand-written read (Ai think) picks at the current decision points.
 
-The planes, scalars and actions are documented in lib/core/Features.h.
+The planes, scalars and actions are documented in lib/core/Features.h. SOURCE_HASH is the hash of
+the C++ sources the module was built from (hasami_env/srchash.py).
 """
 
-from ._core import BOARD, N_ACTIONS, N_CHANNELS, N_SCALARS, STAY, BatchEnv
+from ._core import BOARD, N_ACTIONS, N_CHANNELS, N_SCALARS, SOURCE_HASH, STAY, BatchEnv
 
-__all__ = ["BatchEnv", "BOARD", "N_ACTIONS", "N_CHANNELS", "N_SCALARS", "STAY"]
+__all__ = ["BatchEnv", "BOARD", "N_ACTIONS", "N_CHANNELS", "N_SCALARS", "SOURCE_HASH", "STAY"]

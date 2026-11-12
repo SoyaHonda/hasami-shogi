@@ -5,6 +5,7 @@
 """
 
 import glob
+import importlib.util
 import os
 
 from pybind11.setup_helpers import ParallelCompile, Pybind11Extension, build_ext
@@ -20,6 +21,12 @@ CORE = os.path.normpath(os.path.join(HERE, "..", "lib", "core"))
 SOURCES = [os.path.join(HERE, "hasami_env", "_core.cpp")] + sorted(glob.glob(os.path.join(CORE, "*.cpp")))
 HEADERS = sorted(glob.glob(os.path.join(CORE, "*.h")))
 
+# The sources' hash, built into the module (hasami_env/srchash.py, loaded without the package).
+_spec = importlib.util.spec_from_file_location("srchash", os.path.join(HERE, "hasami_env", "srchash.py"))
+_srchash = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_srchash)
+SOURCE_HASH = _srchash.source_hash(os.path.dirname(HERE))
+
 ParallelCompile("NPY_NUM_BUILD_JOBS").install()
 
 setup(
@@ -31,6 +38,7 @@ setup(
             "hasami_env._core",
             SOURCES,
             include_dirs=[CORE],
+            define_macros=[("HASAMI_SOURCE_HASH", '"%s"' % SOURCE_HASH)],
             depends=HEADERS,
             cxx_std=17,
             # The same floating point as the native, WASM and ESP32 builds (platformio.ini).

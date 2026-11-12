@@ -1,16 +1,29 @@
 """hasami_env.BatchEnv against the array contract of plan 2026-11-12 section 4."""
 
+import os
+
 import numpy as np
 import pytest
 
 import hasami_env
 from hasami_env import BatchEnv
+from hasami_env.srchash import source_hash
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def random_legal(mask, rng):
     """One legal action per row of mask, uniformly (Gumbel-max over the legal ones)."""
     g = rng.gumbel(size=mask.shape)
     return np.where(mask, g, -np.inf).argmax(axis=1).astype(np.int32)
+
+
+def test_build_matches_sources():
+    # A prebuilt wheel (python/wheels) must come from these very sources; rebuild it otherwise.
+    assert hasami_env.SOURCE_HASH == source_hash(REPO), (
+        f"hasami_env was built from other sources ({hasami_env.SOURCE_HASH}, checkout {source_hash(REPO)}): "
+        "rebuild it (python/README.md)"
+    )
 
 
 def test_constants():
