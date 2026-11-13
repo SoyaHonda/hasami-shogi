@@ -25,6 +25,12 @@
 //              anything to stop early
 //   repel s    the same in RepelWeak (Magnet::REPEL_WEAK_DUTY), for the drag
 //              test: the travel polarity that should keep human pieces still
+//   pole       with the electromagnet under the prototype square and no piece
+//              on it: energize PullMachine for 0.3 s and print the field change
+//              at the sensor. Positive (like an S pole on the sensor's marked
+//              face, so the electromagnet's top is N): PullMachine attracts the
+//              machine's S-down pieces, as Magnet assumes. Negative: swap the
+//              electromagnet's wires on OUT1 and OUT2
 //
 // Without a motor, `pass 0` measures the energized magnet's effect on the
 // sensor with the head where it stands (put it under the next square by hand).
@@ -57,6 +63,10 @@ constexpr uint32_t HEAT_REPORT_MS = 5000;
 // `grab`, `repel`: longest run accepted and progress interval.
 constexpr float GRAB_MAX_S = 30.0f;
 constexpr uint32_t GRAB_REPORT_MS = 1000;
+// `pole`: energized time before reading, and the field change that counts as a clear answer
+// (the electromagnet a few mm below the sensor gives tens of mT).
+constexpr uint32_t POLE_MS = 300;
+constexpr float POLE_MIN_MT = 2.0f;
 // The prototype square's sensor: mux 0, channel 0 (select lines held low),
 // or the sensor wired straight to HALL_ADC[0].
 constexpr int PROTO_MUX = 0;
@@ -342,8 +352,29 @@ void cmdEnergize(MagnetMode mode, float s) {
   Serial.println("record in hardware/test-log.md whether the piece followed (grab) or stayed (repel)");
 }
 
+// `pole`: which way PullMachine magnetizes the electromagnet's top, read by the sensor above it.
+void cmdPole() {
+  magnet.set(MagnetMode::Off);
+  delay(100);
+  const float offMv = readHallMv(CAL_SAMPLES);
+  magnet.set(MagnetMode::PullMachine);
+  waitMs(POLE_MS);
+  const float onMv = readHallMv(CAL_SAMPLES);
+  magnet.set(MagnetMode::Off);
+  const float mt = hallcal::fieldMt(onMv, offMv, pins::HALL_SENSOR);
+  Serial.printf("pole: PullMachine moves the sensor from %.0f mV to %.0f mV, %+.1f mT (%s)\n", offMv, onMv,
+                mt, sensorName(pins::HALL_SENSOR));
+  if (mt >= POLE_MIN_MT) {
+    Serial.println("  OK: the electromagnet's top is N, so PullMachine attracts S-down (machine) pieces");
+  } else if (mt <= -POLE_MIN_MT) {
+    Serial.println("  reversed: unplug the 12 V adapter, swap the electromagnet's wires on OUT1 and OUT2, run pole again");
+  } else {
+    Serial.println("  no clear change: is the 12 V adapter plugged in and the sled under the prototype square?");
+  }
+}
+
 void help() {
-  Serial.println("commands: pull v a | hall | cal | pass d | led b | heat s d | hold d | grab s | repel s");
+  Serial.println("commands: pull v a | hall | cal | pass d | led b | heat s d | hold d | grab s | repel s | pole");
 }
 
 void handleLine(char* line) {
@@ -369,6 +400,8 @@ void handleLine(char* line) {
     cmdEnergize(MagnetMode::PullMachine, x);
   } else if (strcmp(cmd, "repel") == 0 && n == 2) {
     cmdEnergize(MagnetMode::RepelWeak, x);
+  } else if (strcmp(cmd, "pole") == 0) {
+    cmdPole();
   } else {
     help();
   }

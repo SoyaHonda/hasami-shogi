@@ -29,7 +29,9 @@ ACRYLIC_T = 2.0
 GAP = 2.0               # electromagnet top to grid bottom
 MAGNET_D, MAGNET_H = 25.0, 20.0   # ZYE1-P25/20
 FLOOR_T = 3.0           # frame base plate
-SLED_LEDGE = 7.0        # electromagnet seat above the sled's underside (floor 4, hollow 3)
+SLED_LEDGE = 7.0        # electromagnet seat above the sled's underside (floor 4.4, hollow 2.6)
+SLED_FLOOR = 4.4        # the sled's floor; the M4 screw head sinks 3.4 into it from below,
+HEAD_POCKET = 3.4       # leaving a 1.0 shelf under the head (an M4 pan head is 2.8 tall)
 CHANNEL_W = 33.0        # between the frame walls
 WALL_T = 5.0
 FRAME_L, FRAME_W = 150.0, 70.0
@@ -47,7 +49,7 @@ POCKET_D, POCKET_H = 10.3, 6.2    # three 10 x 2 magnets
 SPACER_D = 9.8
 SEG = 96
 
-WALL_TOP = FLOOR_T + SLED_LEDGE + MAGNET_H + GAP   # 30: grid bottom
+WALL_TOP = FLOOR_T + SLED_LEDGE + MAGNET_H + GAP   # 32: grid bottom
 
 
 def box(x0, y0, z0, x1, y1, z1):
@@ -115,10 +117,10 @@ def sled():
     part = box(-base_x / 2, -base_y / 2, 0, base_x / 2, base_y / 2, SLED_LEDGE)
     part += cyl(0, 0, 0, top, cup_od)
     part -= cyl(0, 0, SLED_LEDGE, top + 1, seat_d)          # seat
-    part -= cyl(0, 0, 4.0, SLED_LEDGE + 0.01, 20.0)         # hollow under the back (leads)
-    part -= box(-cup_od / 2 - 1, -3.5, 4.0, -6, 3.5, top + 1)  # lead slot towards the handle
-    part -= cyl(0, 0, -1, 4.5, 4.5)                         # M4 screw into the magnet's back
-    part -= cyl(0, 0, -1, 3.5, 9.5)                         # its head sunk below the floor
+    part -= cyl(0, 0, SLED_FLOOR, SLED_LEDGE + 0.01, 20.0)  # hollow under the back (leads)
+    part -= box(-cup_od / 2 - 1, -3.5, SLED_FLOOR, -6, 3.5, top + 1)  # lead slot towards the handle
+    part -= cyl(0, 0, -1, SLED_FLOOR + 0.5, 4.5)            # M4 screw into the magnet's back
+    part -= cyl(0, 0, -1, HEAD_POCKET, 9.5)                 # its head sunk below the floor
     handle_end = -140.0
     part += box(handle_end, -4, 0, -base_x / 2 + 0.5, 4, 6)
     frame_end = -FRAME_L / 2
@@ -131,7 +133,8 @@ def sled():
 def jig():
     """Laid over the acrylic, its skirt round the grid plate: a slot one piece base wide and
     3.6 longer over the prototype square. A piece pushed to the slot's -x end stands on the
-    square's centre, pushed to the +x end 3.6 off it (the identification test)."""
+    square's centre, pushed to the +x end 3.6 off it (the identification test). Notches in the
+    skirt let the sensor's and the LED's wires out of the grid plate's edges."""
     t, skirt, wall = 2.0, GRID_T + ACRYLIC_T, 1.2
     ix, iy = GRID_L / 2 + 0.4, GRID_W / 2 + 0.4
     part = box(-ix - wall, -iy - wall, 0, ix + wall, iy + wall, t)
@@ -139,6 +142,8 @@ def jig():
     r = PIECE_BASE_D / 2 + 0.4
     slot = cyl(0, 0, -1, t + 1, 2 * r) + cyl(JIG_SLOT_SHIFT, 0, -1, t + 1, 2 * r) + box(0, -r, -1, JIG_SLOT_SHIFT, r, t + 1)
     part -= slot
+    for y, w in ((iy, SENSOR_SLOT_W + 3), (-iy, LED_SLOT_W + 3)):  # wire exits
+        part -= box(-w / 2, y - 3, -skirt - 1, w / 2, y + 3, 0.0)
     return part
 
 
