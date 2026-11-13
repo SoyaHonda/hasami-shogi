@@ -19,6 +19,15 @@
 //              anything to stop early
 //   hold d     set the hold duty (0-255) that Pull modes drop to after
 //              Magnet::BOOST_MS, for testing `pull` at reduced duty (less heat)
+//   grab s     energize the magnet in PullMachine as a real job does (boost,
+//              then the hold duty) for s seconds (at most 30) while the sled is
+//              moved by hand (stage 1, before the motor; hardware/rig). Send
+//              anything to stop early
+//   repel s    the same in RepelWeak (Magnet::REPEL_WEAK_DUTY), for the drag
+//              test: the travel polarity that should keep human pieces still
+//
+// Without a motor, `pass 0` measures the energized magnet's effect on the
+// sensor with the head where it stands (put it under the next square by hand).
 //
 // The thresholds follow the DRV5053 variant chosen in Pins.h
 // (pins::HALL_SENSOR). Results go into hardware/test-log.md.
@@ -45,6 +54,9 @@ constexpr int CAL_SAMPLES = 32;
 // `heat`: longest run accepted (guards against typos) and progress interval.
 constexpr float HEAT_MAX_S = 120.0f;
 constexpr uint32_t HEAT_REPORT_MS = 5000;
+// `grab`, `repel`: longest run accepted and progress interval.
+constexpr float GRAB_MAX_S = 30.0f;
+constexpr uint32_t GRAB_REPORT_MS = 1000;
 // The prototype square's sensor: mux 0, channel 0 (select lines held low),
 // or the sensor wired straight to HALL_ADC[0].
 constexpr int PROTO_MUX = 0;
@@ -288,8 +300,50 @@ void cmdHold(float d) {
                 100.0f * magnet.holdDuty() / Magnet::MAX_DUTY);
 }
 
+// `grab` (PullMachine with boost and hold) and `repel` (RepelWeak): the magnet on for s seconds
+// while the sled is moved by hand.
+void cmdEnergize(MagnetMode mode, float s) {
+  const char* name = mode == MagnetMode::RepelWeak ? "repel" : "grab";
+  if (!(s > 0 && s <= GRAB_MAX_S)) {  // also rejects NaN
+    Serial.printf("error: s must be > 0 and <= %.0f\n", GRAB_MAX_S);
+    return;
+  }
+  const uint32_t ms = static_cast<uint32_t>(lroundf(s * 1000.0f));
+  Serial.printf("%s: magnet on for %.1f s, move the sled by hand now (send anything to stop)\n", name, s);
+  drainInput();
+  magnet.set(mode);
+  const uint32_t t0 = millis();
+  uint32_t nextReport = t0 + GRAB_REPORT_MS;
+  bool stopped = false;
+  while (millis() - t0 < ms) {
+    magnet.update(millis());
+    if (inputPending()) {
+      stopped = true;
+      break;
+    }
+    if (static_cast<int32_t>(millis() - nextReport) >= 0) {
+      Serial.printf("  %lu s, duty %lu\n", static_cast<unsigned long>((millis() - t0) / 1000),
+                    static_cast<unsigned long>(magnet.duty()));
+      nextReport += GRAB_REPORT_MS;
+    }
+    delay(1);
+  }
+  const uint32_t onMs = magnet.onMs(millis());
+  magnet.set(MagnetMode::Off);
+  if (stopped) drainInput();
+  if (mode == MagnetMode::RepelWeak) {
+    Serial.printf("repel: %s, on %.1f s at duty %lu\n", stopped ? "stopped early" : "done", onMs / 1000.0f,
+                  static_cast<unsigned long>(Magnet::REPEL_WEAK_DUTY));
+  } else {
+    Serial.printf("grab: %s, on %.1f s (duty %lu for %lu ms, then hold %lu)\n", stopped ? "stopped early" : "done",
+                  onMs / 1000.0f, static_cast<unsigned long>(Magnet::PULL_DUTY),
+                  static_cast<unsigned long>(Magnet::BOOST_MS), static_cast<unsigned long>(magnet.holdDuty()));
+  }
+  Serial.println("record in hardware/test-log.md whether the piece followed (grab) or stayed (repel)");
+}
+
 void help() {
-  Serial.println("commands: pull v a | hall | cal | pass d | led b | heat s d | hold d");
+  Serial.println("commands: pull v a | hall | cal | pass d | led b | heat s d | hold d | grab s | repel s");
 }
 
 void handleLine(char* line) {
@@ -311,6 +365,10 @@ void handleLine(char* line) {
     cmdHeat(x, y);
   } else if (strcmp(cmd, "hold") == 0 && n == 2) {
     cmdHold(x);
+  } else if (strcmp(cmd, "grab") == 0 && n == 2) {
+    cmdEnergize(MagnetMode::PullMachine, x);
+  } else if (strcmp(cmd, "repel") == 0 && n == 2) {
+    cmdEnergize(MagnetMode::RepelWeak, x);
   } else {
     help();
   }
