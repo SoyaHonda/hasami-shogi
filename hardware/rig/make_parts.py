@@ -48,6 +48,7 @@ PIECE_BASE_D, PIECE_BASE_H = 28.0, 8.0
 PIECE_BODY_D, PIECE_BODY_H = 22.0, 14.0
 POCKET_D, POCKET_H = 10.3, 6.2    # three 10 x 2 magnets
 SPACER_D = 9.8
+ACRYLIC_L, ACRYLIC_W = GRID_L - 2.0, GRID_W - 2.0  # 118 x 43: inside the jig's skirt with room
 SEG = 96
 
 WALL_TOP = FLOOR_T + SLED_LEDGE + MAGNET_H + GAP   # 32: grid bottom
@@ -185,6 +186,27 @@ PARTS = {
 UPSIDE_DOWN = {"jig"}
 
 
+def write_acrylic(out):
+    """Outline of the milky acrylic sheet for a laser cutter: SVG (mm) and DXF (R12, mm)."""
+    L, W = ACRYLIC_L, ACRYLIC_W
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{L + 10:g}mm" height="{W + 10:g}mm" '
+           f'viewBox="0 0 {L + 10:g} {W + 10:g}">\n'
+           f'  <!-- milky acrylic 2 mm, {L:g} x {W:g} mm: cut along the red line -->\n'
+           f'  <rect x="5" y="5" width="{L:g}" height="{W:g}" fill="none" stroke="#ff0000" stroke-width="0.1"/>\n'
+           f'</svg>\n')
+    with open(os.path.join(out, "acrylic.svg"), "w") as f:
+        f.write(svg)
+    pts = [(0, 0), (L, 0), (L, W), (0, W)]
+    lines = ["0", "SECTION", "2", "ENTITIES"]
+    for (x1, y1), (x2, y2) in zip(pts, pts[1:] + pts[:1]):
+        lines += ["0", "LINE", "8", "CUT", "10", f"{x1:g}", "20", f"{y1:g}", "30", "0",
+                  "11", f"{x2:g}", "21", f"{y2:g}", "31", "0"]
+    lines += ["0", "ENDSEC", "0", "EOF"]
+    with open(os.path.join(out, "acrylic.dxf"), "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"acrylic     {L:6.1f} x {W:6.1f} mm (laser outline) -> {os.path.relpath(out)}/acrylic.svg, acrylic.dxf")
+
+
 def to_trimesh(m):
     mesh = m.to_mesh()
     return trimesh.Trimesh(vertices=mesh.vert_properties[:, :3], faces=mesh.tri_verts)
@@ -193,6 +215,7 @@ def to_trimesh(m):
 def main():
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stl")
     os.makedirs(out, exist_ok=True)
+    os.makedirs(os.path.join(os.path.dirname(out), "laser"), exist_ok=True)
     for name, make in PARTS.items():
         m = make()
         if name in UPSIDE_DOWN:
@@ -205,6 +228,7 @@ def main():
         t.export(path)
         ext = t.bounds[1] - t.bounds[0]
         print(f"{name:11s} {ext[0]:6.1f} x {ext[1]:6.1f} x {ext[2]:5.1f} mm  {t.volume / 1000:6.1f} cm3  -> {os.path.relpath(path)}")
+    write_acrylic(os.path.join(os.path.dirname(os.path.abspath(__file__)), "laser"))
     print(f"grid bottom (wall top) at z = {WALL_TOP:.1f} mm; magnet to electromagnet = "
           f"{WALL_TOP + GRID_T + ACRYLIC_T - (FLOOR_T + SLED_LEDGE + MAGNET_H):.1f} mm")
 
