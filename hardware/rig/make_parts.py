@@ -40,7 +40,8 @@ SENSOR_WIN = (4.6, 3.8)           # DRV5053 TO-92 body 4.00 x 3.15, legs towards
 SENSOR_SLOT_W = 5.0               # legs and soldered wires to the +y edge
 LED_OFFSET = 8.0                  # LED centre from the square centre, towards -y
 LED_WIN = (11.6, 8.6)             # AE-WS2812B board 11 x 8
-LED_SLOT_W = 8.0                  # four wires to the -y edge
+LED_SLOT_W = 5.0                  # its three wires run up the right of the sensor window and join the
+LED_SLOT_X0 = SENSOR_SLOT_W / 2 + 2.5  # sensor's slot past it: every wire leaves by the +y edge
 PEG_X, PEG_D, PEG_H = 55.0, 3.0, 2.0  # pegs on the walls locate the grid plate
 JIG_SLOT_SHIFT = 3.6              # the identification test's offset
 PIECE_BASE_D, PIECE_BASE_H = 28.0, 8.0
@@ -87,15 +88,17 @@ def frame():
 
 def grid():
     """Three squares in a row, the prototype square in the middle. Through windows for the
-    sensor (centre) and the LED (8 off, towards -y), slots for their wires to the edges, and
-    shallow lines on the top at the square boundaries."""
+    sensor (centre) and the LED (8 off, towards -y), slots for their wires to the +y edge (the
+    LED's runs from the right of its window, past the sensor's), and shallow lines on the top at
+    the square boundaries."""
     part = box(-GRID_L / 2, -GRID_W / 2, 0, GRID_L / 2, GRID_W / 2, GRID_T)
     sw, sh = SENSOR_WIN
     part -= box(-sw / 2, -sh / 2, -1, sw / 2, sh / 2, GRID_T + 1)
-    part -= box(-SENSOR_SLOT_W / 2, sh / 2 - 0.1, -1, SENSOR_SLOT_W / 2, GRID_W / 2 + 1, GRID_T + 1)
+    x1 = LED_SLOT_X0 + LED_SLOT_W  # one slot for all the wires, from just past the sensor window
+    part -= box(-SENSOR_SLOT_W / 2, sh / 2 - 0.1, -1, x1, GRID_W / 2 + 1, GRID_T + 1)
     lw, lh = LED_WIN
     part -= box(-lw / 2, -LED_OFFSET - lh / 2, -1, lw / 2, -LED_OFFSET + lh / 2, GRID_T + 1)
-    part -= box(-LED_SLOT_W / 2, -GRID_W / 2 - 1, -1, LED_SLOT_W / 2, -LED_OFFSET - lh / 2 + 0.1, GRID_T + 1)
+    part -= box(LED_SLOT_X0, -LED_OFFSET - lh / 2, -1, x1, sh / 2, GRID_T + 1)
     for x in (-PEG_X, PEG_X):
         for y in (-(CHANNEL_W / 2 + WALL_T / 2), CHANNEL_W / 2 + WALL_T / 2):
             part -= cyl(x, y, -1, GRID_T + 1, PEG_D + 0.6)
@@ -133,8 +136,8 @@ def sled():
 def jig():
     """Laid over the acrylic, its skirt round the grid plate: a slot one piece base wide and
     3.6 longer over the prototype square. A piece pushed to the slot's -x end stands on the
-    square's centre, pushed to the +x end 3.6 off it (the identification test). Notches in the
-    skirt let the sensor's and the LED's wires out of the grid plate's edges."""
+    square's centre, pushed to the +x end 3.6 off it (the identification test). A notch in the
+    skirt lets the sensor's and the LED's wires out of the grid plate's +y edge."""
     t, skirt, wall = 2.0, GRID_T + ACRYLIC_T, 1.2
     ix, iy = GRID_L / 2 + 0.4, GRID_W / 2 + 0.4
     part = box(-ix - wall, -iy - wall, 0, ix + wall, iy + wall, t)
@@ -142,8 +145,8 @@ def jig():
     r = PIECE_BASE_D / 2 + 0.4
     slot = cyl(0, 0, -1, t + 1, 2 * r) + cyl(JIG_SLOT_SHIFT, 0, -1, t + 1, 2 * r) + box(0, -r, -1, JIG_SLOT_SHIFT, r, t + 1)
     part -= slot
-    for y, w in ((iy, SENSOR_SLOT_W + 3), (-iy, LED_SLOT_W + 3)):  # wire exits
-        part -= box(-w / 2, y - 3, -skirt - 1, w / 2, y + 3, 0.0)
+    x0, x1 = -SENSOR_SLOT_W / 2 - 1.5, LED_SLOT_X0 + LED_SLOT_W + 1.5  # wire exit
+    part -= box(x0, iy - 3, -skirt - 1, x1, iy + 3, 0.0)
     return part
 
 
