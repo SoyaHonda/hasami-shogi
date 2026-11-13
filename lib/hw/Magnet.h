@@ -9,8 +9,8 @@
 //  PullHuman:   PWM on IN2, the opposite polarity (attracts N-down pieces).
 //  RepelWeak:   weak duty in the PullMachine polarity, which repels the
 //               N-down human pieces the head passes under during travel.
-// The TB67H450 truth table and maximum PWM frequency this relies on are
-// UNVERIFIED (see Pins.h): confirm against its datasheet.
+// The TB67H450 truth table and PWM limit this relies on match its datasheet
+// (see Pins.h): during PWM's low phases the inputs are L/L (outputs Hi-Z).
 //
 // Boost then hold: the coil heats up when energised continuously, so after a
 // switch to a Pull mode the magnet runs at PULL_DUTY for BOOST_MS (to grab the

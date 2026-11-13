@@ -70,10 +70,11 @@ constexpr uint8_t LIMIT_Y = 33;
 // LEDC PWM (see Magnet). Electromagnet: Kyoritsu ZYE1-P25/20 (25 mm dia. x
 // 20 mm, 12 V, 0.33 A per the seller), which heats up when energised
 // continuously; see Magnet::BOOST_MS / HOLD_DUTY.
-// UNVERIFIED (the datasheet could not be fetched): the IN1/IN2 truth table
-// assumed by Magnet (both low = outputs off; IN1 high = one direction, IN2 high
-// = the other) and the maximum input PWM frequency (Magnet uses 20 kHz).
-// Confirm both against the TB67H450 datasheet (hardware/test-log.md).
+// Datasheet (read 2026-11-13, hardware/test-log.md): L/L stop (outputs Hi-Z),
+// H/L forward, L/H reverse, H/H brake; input high from 2.0 V, so 3.3 V drives
+// it; PWM input up to 400 kHz (Magnet uses 20 kHz); L/L for about 1 ms enters
+// standby, which a high input leaves within 30 us. As wired on the Akizuki
+// AE-TB67H450 module without current limiting: RS to GND, VREF to 3.3 V.
 constexpr uint8_t MAGNET_IN1 = 18;
 constexpr uint8_t MAGNET_IN2 = 4;
 
