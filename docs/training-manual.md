@@ -100,7 +100,7 @@ python -m pytest python
 次のように出れば成功です。`/home/...` と `SOURCE_HASH` のあとは、人や時期によって違います。
 
 ```text
-hasami_env: not built here, from /home/u.../venv/lib/python3.12/site-packages/hasami_env, SOURCE_HASH 06840d7e26bafd9f
+hasami_env: not built here, from /home/u.../venv/lib/python3.12/site-packages/hasami_env, SOURCE_HASH ec571ae24a35775a
 collected 11 items
 
 python/tests/test_env.py ...........   [100%]
