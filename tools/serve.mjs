@@ -1,11 +1,14 @@
 // Static server for web/ on http://localhost:8080 (ES modules cannot be loaded from file://).
 // Node.js standard library only. Usage: npm run serve  (PORT=... to change the port)
+// POST /api/games takes a game record from the page (web/record.js) and appends it, one JSON
+// object per line, to logs/games.jsonl (not in git).
 import { createServer } from 'node:http';
-import { readFile, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../web/', import.meta.url));
+const logs = fileURLToPath(new URL('../logs/', import.meta.url));
 const port = Number(process.env.PORT) || 8080;
 
 const TYPES = {
@@ -25,7 +28,27 @@ function send(res, code, body, type = 'text/plain; charset=utf-8') {
   res.end(body);
 }
 
+// A record from the page: checked to be one JSON object of the record format, then appended.
+async function saveGame(req, res) {
+  let body = '';
+  for await (const chunk of req) {
+    body += chunk;
+    if (body.length > 20 * 1024 * 1024) return send(res, 413, 'Too Large');
+  }
+  let rec;
+  try {
+    rec = JSON.parse(body);
+  } catch {
+    return send(res, 400, 'Bad JSON');
+  }
+  if (!rec || rec.format !== 1 || !Array.isArray(rec.ops)) return send(res, 400, 'Not a game record');
+  await mkdir(logs, { recursive: true });
+  await appendFile(join(logs, 'games.jsonl'), JSON.stringify(rec) + '\n');
+  send(res, 204, '');
+}
+
 const server = createServer(async (req, res) => {
+  if (req.method === 'POST' && req.url === '/api/games') return saveGame(req, res);
   if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method Not Allowed');
   let path;
   try {
