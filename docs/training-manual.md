@@ -52,10 +52,11 @@ flowchart LR
 ### 11/16〜11/22（リーグ、第7章）
 
 - [ ] 最新を取り込み、テストが `22 passed` になる（7-2）
-- [ ] 速さ 1.0 の学習を評価して、結果を push する（7-3）
+- [ ] 速さ 1.0 の学習の結果を push する（7-3）
 - [ ] 速さ 1.0 のリーグを始める（7-4）
 - [ ] 人間の主役への勝率（`main_win`）が下がっていく（人間側が学んでいる）
-- [ ] リーグが終わったら、機械を評価し、攻略役を 3 本回す（7-6）
+- [ ] リーグが終わったら、結果を push する（7-6）
+- [ ] 評価と攻略役（7-7、11/24 までのいつでも）
 
 ### 11/24
 
@@ -486,15 +487,9 @@ python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0
 
 確認: 最後が `22 passed` になった。
 
-### 7-3 速さ 1.0 の学習を評価して保存する
+### 7-3 速さ 1.0 の学習の結果を push する
 
-リーグを始める前に、固定の相手で学習した AI の成績を残しておきます。発表の表の 1 行目になる数字です（6-3 と同じ。Race3 は、2〜3 回置いて取る手を探す、Race より強いボットです）。
-
-```bash
-python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0 --opponents b1,race,race3
-```
-
-10 分ほどで 6 行（相手ごとに今の読みと学習した AI）が出ます。発表の表に使うので控えておき、`runs/b1_s10` を push します（Git の節）。
+VM は 11 月末に回収されるので、終わった学習の結果は先に push しておきます（Git の節。`runs/b1_s10` の `log.csv` と `model.pt`）。評価はここではしなくて構いません。リーグは `runs/b1_s10/model.pt` を読み込むだけで上書きしないので、評価はリーグのあとでまとめてできます（7-7）。
 
 ### 7-4 リーグを始める
 
@@ -530,9 +525,19 @@ tail -n 3 runs/league_s10/log.csv
 
 10〜20 分たったら最後の 3 行を見て、表の「正常な動き」と比べます。気をつけるのは 2 つです。`b1_win` が始めより大きく（たとえば半分以下に）下がり続けるときは、機械が人間の主役だけに合わせてしまっています。`main_win` が 1 時間たっても 1 に張り付いたままなら、人間側が学べていません。どちらかが起きたら、tmux の画面で Ctrl+c を押してリーグを止めます。
 
-### 7-6 終わったら
+### 7-6 終わったら push する
 
-リーグの機械（`runs/league_s10/machine.pt`）を、7-3 と同じ相手で評価します。
+リーグの結果は、ほかの学習とは別の `runs/league_s10` に保存されています（`log.csv` は毎回の更新、`machine.pt`・`human.pt`・`checkpoint.pt` は 50 回ごとと最後、`pool/` に人間の過去の版）。終わったら、まず push します（Git の節。`runs/league_s10` の `log.csv`、`machine.pt`、`human.pt`）。分析はこのあと、11/24 までのいつでも構いません。
+
+### 7-7 評価と攻略役（あとでまとめて）
+
+評価も攻略役も、保存した `model.pt` と `machine.pt` を読むだけなので、いつやっても同じ結果になります。ただし、リーグを回している最中にやると CPU を取り合ってリーグが遅くなるので、リーグが終わってからにします。
+
+まず、固定の相手で学習した AI とリーグの AI を、同じ相手で評価します（Race3 は、2〜3 回置いて取る手を探す、Race より強いボットです）。それぞれ 10 分ほどで 6 行（相手ごとに今の読みと学習した AI）が出ます。発表の表の数字になります。
+
+```bash
+python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0 --opponents b1,race,race3
+```
 
 ```bash
 python python/train/evaluate.py --model runs/league_s10/machine.pt --speed-scale 1.0 --opponents b1,race,race3
@@ -552,9 +557,7 @@ python python/train/league.py --exploit runs/b1_s10/model.pt --updates 300 --thr
 python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300 --threads 3 --out runs/exploit_league
 ```
 
-攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。3 本の最後の 20 行の平均を比べると、どの機械がいちばん攻略されにくいかがわかります。`tail -n 20 runs/exploit_read/log.csv` などで見て、発表の表にします。
-
-最後に、リーグの結果を push します（`runs/league_s10/log.csv`、`machine.pt`、`human.pt`。Git の節）。
+攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。3 本の最後の 20 行の平均を比べると、どの機械がいちばん攻略されにくいかがわかります。`tail -n 20 runs/exploit_read/log.csv` などで見て、発表の表にします。攻略役の結果も、それぞれのフォルダー（`runs/exploit_read` など）に別に保存されます。
 
 ## 困ったとき
 
