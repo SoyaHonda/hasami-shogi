@@ -1,6 +1,6 @@
 # はさみ将棋AI 学習担当マニュアル（11/12〜11/25）
 
-2026-11-12 作成（11/16 に Claude Docs から GitHub へ移した）、本田
+2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移し、続きからの学習とテストの数を足した）、本田
 
 このマニュアルの順に進めると、11/25 の発表に使う学習した AI と評価の表ができます。各章の最後にある「確認」ができたら、次の章へ進んでください。わからないところは、本田に連絡してください。コマンドは、GitHub で見ると各ブロックの右上のボタンでコピーできます。
 
@@ -34,9 +34,9 @@ flowchart LR
 
 ### 11/16 まで
 
-- [ ] 第1章: 自分の VM でテストが通る（`11 passed`）
+- [ ] 第1章: 自分の VM でテストが通る（`16 passed`）
 - [ ] 第2章: ランダムな手の 500 局が、マニュアルと同じ数字になる
-- [ ] 第4章: `model.py` と `ppo.py` を git pull で取り込み、テスト（15 passed）と短い学習が最後まで動く
+- [ ] 第4章: 最新を取り込み、テスト（`16 passed`）と短い学習が最後まで動く
 
 ### 11/17
 
@@ -97,18 +97,19 @@ python -m pip install -r python/requirements.txt && python -m pip install --forc
 python -m pytest python
 ```
 
-次のように出れば成功です。`/home/...` と `SOURCE_HASH` のあとは、人や時期によって違います。
+30 秒ほどで、次のように出れば成功です。`/home/...` と `SOURCE_HASH` のあとは、人や時期によって違います。`test_env.py` は学習用の環境の 11 件、`test_train.py` は学習のプログラムの 5 件です（VM には PyTorch が入っているので、学習のテストもここで動きます）。
 
 ```text
 hasami_env: not built here, from /home/u.../venv/lib/python3.12/site-packages/hasami_env, SOURCE_HASH ec571ae24a35775a
-collected 11 items
+collected 16 items
 
-python/tests/test_env.py ...........   [100%]
+python/tests/test_env.py ...........                                   [ 68%]
+python/tests/test_train.py .....                                       [100%]
 
-============= 11 passed in 2.12s =============
+============= 16 passed in 31.02s =============
 ```
 
-確認: 最後が `11 passed` になった。
+確認: 最後が `16 passed` になった。
 
 次に VM につないだときも、毎回 `cd ~/hasami-shogi && source ~/venv/bin/activate` から始めます。
 
@@ -218,13 +219,21 @@ scal の 6 つは、機械が取った枚数、人間が取った枚数、残り
 
 ## 第4章 学習のプログラムを置く
 
-学習のプログラムは、GitHub の `python/train/` に入っています。まずはそのまま動かし、動いたら必要に応じて直してください。
+学習のプログラムは、1-2 で取ってきたリポジトリの `python/train/` に入っています。まずはそのまま動かし、動いたら必要に応じて直してください。
 
 ### 4-1 最新にする
 
+本田がプログラムを直したら、次の 2 つで取り込みます。この章を始めるときと、本田から更新を知らせたときに打ってください。
+
 ```bash
-cd ~/hasami-shogi && source ~/venv/bin/activate && git pull
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull origin main
 ```
+
+```bash
+python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl
+```
+
+1 つ目は main の更新を取り込みます。`origin main` を省いた `git pull` は、今いるブランチの更新しか取ってきません。Git の節で自分のブランチを作ったあとは、`git pull` だけでは main の更新が来ず、Already up to date と出てしまいます。2 つ目は wheel の入れ直しです。本田が C++ を変えると wheel も作り直されますが、pip で入れたものは git pull では入れ替わりません。変わっていないときに打っても害はないので、毎回打ってください。
 
 ### 4-2 テストで確かめる
 
@@ -232,7 +241,7 @@ cd ~/hasami-shogi && source ~/venv/bin/activate && git pull
 python -m pytest python
 ```
 
-最後が `15 passed` になれば、学習・評価・学習曲線・録画のプログラムが、あなたの VM で一通り動いています（1 分ほど）。`python/tests/test_train.py` が、小さな設定（8 局 × 16 回 × 2 周）で学習を最後まで回して確かめます。
+最後が `16 passed` になれば、学習・評価・学習曲線・録画・続きからの学習のプログラムが、あなたの VM で一通り動いています（30 秒ほど）。`python/tests/test_train.py` が、小さな設定（8 局 × 16 回 × 2 周）で学習を最後まで回し、途中で止めた学習を続きから再開できるかも確かめます。
 
 ### 4-3 中身を知る
 
@@ -453,7 +462,9 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 | --- | --- | --- |
 | `No module named 'hasami_env'` か `No module named 'hasami_env._core'` | Python 環境が有効でない、wheel を入れていない、`python` フォルダーの中で実行した | `~/hasami-shogi` で実行する。1-3 をやり直す。`PYTHONPATH` に `python/` を入れない |
 | `No module named 'model'` | `model.py` が `python/train/` にない | 4-1 の git pull をやり直す。`python python/train/ppo.py` の形で実行する |
-| テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | `git pull` のあと 1-3 の 2 つ目のコマンドをやり直す。直らなければ本田に知らせる |
+| テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | 4-1 の 2 つのコマンドを打ち直す。直らなければ本田に知らせる |
+| `git pull` しても Already up to date で、本田が直したはずのファイルが来ない | 今いるブランチが main ではない（`git status -sb` の 1 行目でわかる） | `git pull origin main` で main の更新を取り込む（4-1） |
+| テストが `15 passed` で 1 件足りない | 古い `test_train.py` のまま | 4-1 の 2 つのコマンドを打つ |
 | `ValueError: action ... is not in its mask` | 選べない手を渡した | `model.py` の `masked_fill(~mask, -1e9)` を消していないか、別の step の mask を使っていないか確かめる |
 | `steps_per_s` が 1,000 より小さい | ほかの学習と CPU を取り合っている | 同じ VM で 2 本回すときは両方 `--threads 2` にする。`top` で動いているものを見る |
 | `win_rate` がずっと 0 | 学習が進んでいない | 5-4 を試す。Random 相手でも上がらなければ、`permute` や `nonterminal` の行を書き換えていないか確かめる |
