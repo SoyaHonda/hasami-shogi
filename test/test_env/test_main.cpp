@@ -1,8 +1,9 @@
 // The learning environment of plan 2026-11-12 section 4: action numbering, features, the mask
 // against the read's candidates, the same game for the same seed, SimDriver's game when the read
-// plays, the reward and the automatic reset.
+// plays, the reward and the automatic reset; and the human played from outside (DuelEnv, 7.3).
 #include <unity.h>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include "BatchEnv.h"
 #include "Features.h"
@@ -343,6 +344,179 @@ void test_batch_seeds() {
   TEST_FAIL_MESSAGE("slot 1 never finished a game");
 }
 
+// ---- A human played from outside (DuelEnv, plan 2026-11-12 7.3).
+
+void test_duel_config() {
+  const EnvConfig c = envConfig(EnvOpponent::External, 1.0f, Level::Hard);
+  TEST_ASSERT_TRUE(c.externalHuman);
+  TEST_ASSERT_TRUE(c.bot.style == BotStyle::External);
+  TEST_ASSERT_EQUAL_UINT32(400, c.bot.reactMs);  // Race's hand
+  TEST_ASSERT_EQUAL_UINT32(500, c.bot.moveMs);
+  TEST_ASSERT_EQUAL_UINT32(250, c.bot.externalWaitMs);
+  TEST_ASSERT_FALSE(envConfig(EnvOpponent::B1, 1.0f, Level::Hard).externalHuman);
+  TEST_ASSERT_TRUE(envConfig(EnvOpponent::Race3, 1.0f, Level::Hard).bot.style == BotStyle::Race3);
+}
+
+// Random play of both sides: each decision point is the side's own, with its mask; the human
+// decides only with an empty hand, no sooner than the hand allows, and its moves land where it
+// chose; the end gives both sides the win and loss.
+void test_duel_rules_under_random_play() {
+  const EnvConfig cfg = envConfig(EnvOpponent::External, 1.0f, Level::Hard);
+  static uint8_t m2[ACTION_COUNT];
+  int games = 0, humanDecisions = 0, machineDecisions = 0, humanMoves = 0, landed = 0, capsH = 0, capsM = 0;
+  for (uint32_t seed = 1; seed <= 3; seed++) {
+    EnvSlot e(cfg);
+    e.reset(seed);
+    Rng rng(seed * 7);
+    bool waited = false;
+    uint32_t waitedAt = 0;
+    int movedId = -1, toR = -1, toC = -1, fromR = -1, fromC = -1;
+    int seedGames = 0;
+    for (int k = 0; k < 40000 && seedGames < 2; k++) {
+      const Game& g = e.game();
+      TEST_ASSERT_TRUE(e.maskCount() >= 2);
+      int a;
+      if (e.side() == SIDE_HUMAN) {
+        humanDecisions++;
+        TEST_ASSERT_EQUAL_INT(0, g.heldCount());
+        TEST_ASSERT_TRUE(g.pendingId() < 0);
+        TEST_ASSERT_EQUAL_INT(e.maskCount(), buildHumanMask(g, m2));
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(m2, e.mask(), ACTION_COUNT);
+        TEST_ASSERT_EQUAL_INT(ACTION_STAY, e.readAction(Level::Hard));
+        if (g.phase() == Phase::Play && g.hasLastPlace())
+          TEST_ASSERT_TRUE(g.clockMs() - g.lastPlaceMs() >= cfg.bot.reactMs);
+        if (waited) TEST_ASSERT_TRUE(e.now() - waitedAt >= cfg.bot.externalWaitMs);
+        // The previous move landed on its square (or went back when the square was taken).
+        if (movedId > 0) {
+          const PieceView& q = g.pieces()[movedId - 1];
+          if (q.alive) {
+            TEST_ASSERT_FALSE(q.held);
+            const bool atTarget = q.r == toR && q.c == toC, atOrigin = q.r == fromR && q.c == fromC;
+            TEST_ASSERT_TRUE(atTarget || atOrigin);
+            if (atTarget) landed++;
+          }
+          movedId = -1;
+        }
+        waited = false;
+        a = randomLegal(e, rng);
+        if (a == ACTION_STAY) {
+          waited = true;
+          waitedAt = e.now();
+        } else {
+          const BotMove mv = humanMoveOfAction(g, a);
+          TEST_ASSERT_TRUE(mv.kind == BotMove::Move);
+          const PieceView& q = g.pieces()[mv.id - 1];
+          TEST_ASSERT_TRUE(g.phase() == Phase::Opening || g.clockMs() >= q.cooldownUntil);
+          movedId = mv.id;
+          fromR = q.r;
+          fromC = q.c;
+          toR = mv.toR;
+          toC = mv.toC;
+          humanMoves++;
+        }
+      } else {
+        machineDecisions++;
+        TEST_ASSERT_EQUAL_INT(e.maskCount(), buildMask(g, m2));
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(m2, e.mask(), ACTION_COUNT);
+        a = randomLegal(e, rng);
+      }
+      const DuelStep st = e.stepDuel(a);
+      if (!st.done) continue;
+      games++;
+      seedGames++;
+      capsH += st.info.capturedHuman;
+      capsM += st.info.capturedMachine;
+      if (st.info.winner == 2)
+        TEST_ASSERT_TRUE(st.finalReward[SIDE_MACHINE] > 0.9f && st.finalReward[SIDE_HUMAN] < -0.9f);
+      if (st.info.winner == 1)
+        TEST_ASSERT_TRUE(st.finalReward[SIDE_HUMAN] > 0.9f && st.finalReward[SIDE_MACHINE] < -0.9f);
+      waited = false;
+      movedId = -1;
+    }
+  }
+  char msg[160];
+  std::snprintf(msg, sizeof(msg), "games %d, decisions human %d machine %d, human moves %d landed %d, caps h %d m %d",
+                games, humanDecisions, machineDecisions, humanMoves, landed, capsH, capsM);
+  TEST_MESSAGE(msg);
+  TEST_ASSERT_EQUAL_INT(6, games);
+  TEST_ASSERT_TRUE(humanDecisions > 100 && machineDecisions > 100);
+  TEST_ASSERT_TRUE(capsH > 0 && capsM > 0);
+  // Nearly every move lands where it was sent (a taken square sends it back).
+  TEST_ASSERT_TRUE(landed * 10 >= humanMoves * 9);
+}
+
+// The human's view: its own pieces on plane 0, the machine's on plane 1, its captures first.
+void test_duel_human_features() {
+  EnvSlot e(envConfig(EnvOpponent::External, 1.0f, Level::Hard));
+  e.reset(5);
+  Rng rng(1);
+  for (int k = 0; k < 2000 && e.side() != SIDE_HUMAN; k++) e.stepDuel(randomLegal(e, rng));
+  TEST_ASSERT_EQUAL_INT(SIDE_HUMAN, e.side());
+  e.features(planes, scal);
+  int humans = 0, machines = 0;
+  for (int i = 0; i < e.game().pieceCount(); i++) {
+    const PieceView& q = e.game().pieces()[i];
+    if (!q.alive || q.held) continue;
+    TEST_ASSERT_EQUAL_INT16(1, at(q.side == HUMAN ? 0 : 1, q.r, q.c));
+    (q.side == HUMAN ? humans : machines)++;
+  }
+  TEST_ASSERT_EQUAL_INT(humans, planeSum(0));
+  TEST_ASSERT_EQUAL_INT(machines, planeSum(1));
+  TEST_ASSERT_EQUAL_INT(1, planeSum(9));
+  TEST_ASSERT_EQUAL_INT16(e.game().captured(HUMAN), scal[0]);
+  TEST_ASSERT_EQUAL_INT16(e.game().captured(MACHINE), scal[1]);
+  TEST_ASSERT_EQUAL_INT16(100, scal[5]);
+}
+
+void test_duel_same_seed_same_game() {
+  const EnvConfig cfg = envConfig(EnvOpponent::External, 1.0f, Level::Hard);
+  EnvSlot a(cfg), b(cfg);
+  a.reset(11);
+  b.reset(11);
+  Rng ra(4), rb(4);
+  for (int k = 0; k < 3000; k++) {
+    TEST_ASSERT_EQUAL_INT(a.side(), b.side());
+    TEST_ASSERT_EQUAL_UINT32(a.now(), b.now());
+    const DuelStep sa = a.stepDuel(randomLegal(a, ra));
+    const DuelStep sb = b.stepDuel(randomLegal(b, rb));
+    TEST_ASSERT_TRUE(sa.reward == sb.reward);
+    TEST_ASSERT_EQUAL_UINT32(sa.dtMs, sb.dtMs);
+    TEST_ASSERT_EQUAL(sa.done, sb.done);
+  }
+}
+
+// The hand-written read for the machine against an outside human: every move of the read is in
+// the machine's mask, and a human that only waits loses.
+void test_duel_read_against_waiting_human() {
+  EnvSlot e(envConfig(EnvOpponent::External, 1.0f, Level::Hard));
+  e.reset(2);
+  Rng rng(9);
+  for (int k = 0; k < 200000; k++) {
+    int a;
+    if (e.side() == SIDE_MACHINE) {
+      a = e.readAction(Level::Hard);
+      TEST_ASSERT_TRUE(e.mask()[a]);
+    } else {
+      a = e.mask()[ACTION_STAY] ? ACTION_STAY : randomLegal(e, rng);
+    }
+    const DuelStep st = e.stepDuel(a);
+    if (st.done) {
+      TEST_ASSERT_EQUAL_INT(2, st.info.winner);
+      return;
+    }
+  }
+  TEST_FAIL_MESSAGE("the game did not end");
+}
+
+void test_race3_opponent() {
+  EnvSlot e(envConfig(EnvOpponent::Race3, 1.0f, Level::Hard));
+  e.reset(1);
+  for (int k = 0; k < 200000; k++) {
+    if (e.step(e.readAction(Level::Hard)).done) return;
+  }
+  TEST_FAIL_MESSAGE("the game did not end");
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_action_numbering);
@@ -357,5 +531,11 @@ int main(int, char**) {
   RUN_TEST(test_read_matches_simdriver_b1);
   RUN_TEST(test_read_matches_simdriver_race);
   RUN_TEST(test_batch_seeds);
+  RUN_TEST(test_duel_config);
+  RUN_TEST(test_duel_rules_under_random_play);
+  RUN_TEST(test_duel_human_features);
+  RUN_TEST(test_duel_same_seed_same_game);
+  RUN_TEST(test_duel_read_against_waiting_human);
+  RUN_TEST(test_race3_opponent);
   return UNITY_END();
 }

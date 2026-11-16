@@ -113,3 +113,57 @@ def test_a_stopped_run_resumes_from_its_checkpoint(tmp_path, capsys):
     # Nothing left to do -> a clear message instead of a silent run.
     with pytest.raises(SystemExit, match="--steps"):
         ppo.main(["--resume", "--out", out, "--threads", "2"])
+
+
+def test_league_buffer_advantage_matches_ppo_gae():
+    import league
+
+    obs, scal, mask = np.zeros((12, 7, 7), np.int16), np.zeros(6, np.int16), np.ones(1177, bool)
+    buf = league.Buffer()
+    # Two interleaved sequences: "a" with a game end in the middle and a pending last point, "b" shorter.
+    seq = {"a": dict(v=[0.3, -0.2, 0.5, 0.1, 0.4], r=[0.0, 1.0, 0.2, -0.2], dt=[250, 4000, 300, 900], d=[0, 1, 0, 0]),
+           "b": dict(v=[0.7, 0.6, 0.2], r=[0.2, -0.5], dt=[1000, 60000], d=[0, 0])}
+    for t in range(5):
+        for key, s in seq.items():
+            if t < len(s["v"]):
+                buf.add(key, obs, scal, mask, 0, 0.0, s["v"][t])
+                if t < len(s["r"]):
+                    buf.complete(key, s["r"][t], s["dt"][t], s["d"][t])
+    batch, rest = buf.take()
+    adv = batch[5].numpy()
+    got = {"a": adv[:4], "b": adv[4:]}  # take() orders the sequences by first appearance
+    for key, s in seq.items():
+        n = len(s["r"])
+        ref, _ = ppo.gae(torch.tensor(s["r"]).view(n, 1), torch.tensor(s["v"][:n]).view(n, 1),
+                         torch.tensor([s["v"][n]]), torch.tensor(s["dt"], dtype=torch.float32).view(n, 1),
+                         torch.tensor(s["d"], dtype=torch.float32).view(n, 1))
+        np.testing.assert_allclose(got[key], ref.flatten().numpy(), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(batch[6].numpy(), adv + np.array(seq["a"]["v"][:4] + seq["b"]["v"][:2]), rtol=1e-5)
+    # The pending last points stay for the next rollout.
+    assert len(rest) == 0 and sorted(rest.pending) == ["a", "b"]
+
+
+def test_a_short_league_resumes_and_an_exploiter_runs(tmp_path, capsys):
+    import league
+
+    out = str(tmp_path / "league")
+    small = ["--b1-envs", "8", "--duel-envs", "8", "--rollout", "24", "--snapshot-every", "1", "--threads", "2",
+             "--out", out]
+    league.main(["--updates", "2"] + small)
+    assert sorted(os.listdir(os.path.join(out, "pool"))) == ["human_00001.pt", "human_00002.pt"]
+    capsys.readouterr()
+    league.main(["--resume", "--updates", "3", "--out", out, "--threads", "2"])
+    assert "resume:" in capsys.readouterr().out
+    with open(os.path.join(out, "log.csv")) as f:
+        rows = f.read().splitlines()
+    assert rows[0].startswith("update,machine_steps,human_steps,b1_games") and [r.split(",")[0] for r in rows[1:]] == [
+        "1", "2", "3"]
+    # The league's machine is a model.pt for evaluate.py.
+    evaluate.main(["--model", os.path.join(out, "machine.pt"), "--opponents", "race3", "--games", "2"])
+    assert "learned  race3" in capsys.readouterr().out
+
+    for target in ("read", os.path.join(out, "machine.pt")):
+        ex = str(tmp_path / ("ex_" + os.path.basename(target)))
+        league.main(["--exploit", target, "--updates", "1", "--duel-envs", "8", "--rollout", "16", "--threads", "2",
+                     "--out", ex])
+        assert os.path.exists(os.path.join(ex, "human.pt"))
