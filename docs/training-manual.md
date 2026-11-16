@@ -1,6 +1,6 @@
 # はさみ将棋AI 学習担当マニュアル（11/12〜11/25）
 
-2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移し、続きからの学習とテストの数を足した）、本田
+2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移した。続きからの学習、テストの数、第7章のリーグを足した）、本田
 
 このマニュアルの順に進めると、11/25 の発表に使う学習した AI と評価の表ができます。各章の最後にある「確認」ができたら、次の章へ進んでください。わからないところは、本田に連絡してください。コマンドは、GitHub で見ると各ブロックの右上のボタンでコピーできます。
 
@@ -34,9 +34,9 @@ flowchart LR
 
 ### 11/16 まで
 
-- [ ] 第1章: 自分の VM でテストが通る（`16 passed`）
+- [ ] 第1章: 自分の VM でテストが通る（`22 passed`）
 - [ ] 第2章: ランダムな手の 500 局が、マニュアルと同じ数字になる
-- [ ] 第4章: 最新を取り込み、テスト（`16 passed`）と短い学習が最後まで動く
+- [ ] 第4章: 最新を取り込み、テスト（`22 passed`）と短い学習が最後まで動く
 
 ### 11/17
 
@@ -46,8 +46,16 @@ flowchart LR
 
 ### 11/19
 
-- [ ] speed_scale 0.7 と 1.3 の学習を始め、3 本が回っている（2 人の VM に分ける）
+- [ ] speed_scale 0.7 と 1.3 の学習を始め、3 本が回っている（2 人の VM に分ける。0.7 と 1.3 は本田が 11/16 に始めた）
 - [ ] 第6章: `evaluate.py` で、今の読みの数字が基準の表と一致する
+
+### 11/16〜11/22（リーグ、第7章）
+
+- [ ] 最新を取り込み、テストが `22 passed` になる（7-2）
+- [ ] 速さ 1.0 の学習を評価して、結果を push する（7-3）
+- [ ] 速さ 1.0 のリーグを始める（7-4）
+- [ ] 人間の主役への勝率（`main_win`）が下がっていく（人間側が学んでいる）
+- [ ] リーグが終わったら、機械を評価し、攻略役を 3 本回す（7-6）
 
 ### 11/24
 
@@ -97,19 +105,19 @@ python -m pip install -r python/requirements.txt && python -m pip install --forc
 python -m pytest python
 ```
 
-30 秒ほどで、次のように出れば成功です。`/home/...` と `SOURCE_HASH` のあとは、人や時期によって違います。`test_env.py` は学習用の環境の 11 件、`test_train.py` は学習のプログラムの 5 件です（VM には PyTorch が入っているので、学習のテストもここで動きます）。
+1 分ほどで、次のように出れば成功です。`/home/...` と `SOURCE_HASH` のあとは、人や時期によって違います。`test_env.py` は学習用の環境の 15 件、`test_train.py` は学習のプログラムの 7 件です（VM には PyTorch が入っているので、学習のテストもここで動きます）。
 
 ```text
-hasami_env: not built here, from /home/u.../venv/lib/python3.12/site-packages/hasami_env, SOURCE_HASH ec571ae24a35775a
-collected 16 items
+hasami_env: not built here, from /home/u.../venv/lib/python3.12/site-packages/hasami_env, SOURCE_HASH 810d96c0a6a9941b
+collected 22 items
 
-python/tests/test_env.py ...........                                   [ 68%]
-python/tests/test_train.py .....                                       [100%]
+python/tests/test_env.py ...............                               [ 68%]
+python/tests/test_train.py .......                                     [100%]
 
-============= 16 passed in 31.02s =============
+============= 22 passed in 55.00s =============
 ```
 
-確認: 最後が `16 passed` になった。
+確認: 最後が `22 passed` になった。
 
 次に VM につないだときも、毎回 `cd ~/hasami-shogi && source ~/venv/bin/activate` から始めます。
 
@@ -241,7 +249,7 @@ python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0
 python -m pytest python
 ```
 
-最後が `16 passed` になれば、学習・評価・学習曲線・録画・続きからの学習のプログラムが、あなたの VM で一通り動いています（30 秒ほど）。`python/tests/test_train.py` が、小さな設定（8 局 × 16 回 × 2 周）で学習を最後まで回し、途中で止めた学習を続きから再開できるかも確かめます。
+最後が `22 passed` になれば、学習・評価・学習曲線・録画・続きからの学習・リーグのプログラムが、あなたの VM で一通り動いています（1 分ほど）。`python/tests/test_train.py` が、小さな設定（8 局 × 16 回 × 2 周）で学習を最後まで回し、途中で止めた学習を続きから再開できるか、小さなリーグと攻略役が動くかも確かめます。
 
 ### 4-3 中身を知る
 
@@ -454,6 +462,100 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 
 確認: `runs/game.gif` ができ、scp で手元に取ってきて開けた。
 
+## 第7章 リーグ（自己対局）
+
+速さ 1.0 の学習が終わったら、その AI を出発点にして、人間側も学習させる「リーグ」を回します。TA の助言（人間を模したボットに勝つのは一区切りなので、AlphaZero のような自己対局で強くする、比べる相手を工夫する）を受けて 11/16 に足しました。考え方はプロジェクトの計画（`plans/2026-11-12_ai-enshu-scope.md` の 7 章）にあります。
+
+### 7-1 何をするか
+
+リーグでは、機械の AI（機械の主役）と人間側の AI（人間の主役）を同時に学習させます。人間の主役は、ボットではなくネットワークで人間の駒を動かし、今の機械に勝つ指し方を覚えます。指す速さには Race と同じ下限があり、置いてから 0.4 秒たたないと次の駒を選べず、持ち上げてから置くまで 0.5 秒 ±40% かかります。
+
+機械の対局相手は 3 種類です。半分は今までどおり B1 で、現実的な人間に勝てることから離れないようにするためです。残りは、人間の主役か、人間の主役の過去の版です。過去の版は 50 回の更新ごとに保存され、機械がよく負ける版ほど多く選ばれます（PFSP という方法）。こうすると、機械は「今の人間の主役だけに効く癖」ではなく、いろいろな相手に通じる指し方を覚えます。
+
+### 7-2 最新にする
+
+4-1 の 2 つのコマンドで最新を取り込み、テストを回します。
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull origin main
+```
+
+```bash
+python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl && python -m pytest python -q
+```
+
+確認: 最後が `22 passed` になった。
+
+### 7-3 速さ 1.0 の学習を評価して保存する
+
+リーグを始める前に、固定の相手で学習した AI の成績を残しておきます。発表の表の 1 行目になる数字です（6-3 と同じ。Race3 は、2〜3 回置いて取る手を探す、Race より強いボットです）。
+
+```bash
+python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0 --opponents b1,race,race3
+```
+
+10 分ほどで 6 行（相手ごとに今の読みと学習した AI）が出ます。それを本田に送り、`runs/b1_s10` を push します（Git の節）。
+
+### 7-4 リーグを始める
+
+```bash
+tmux new -s league
+```
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && python python/train/league.py --init-machine runs/b1_s10/model.pt --speed-scale 1.0 --threads 3 --out runs/league_s10
+```
+
+`update 1/2000` のような行が出始めたら、Ctrl+b、d で抜けます。2000 回の更新で 7〜9 時間ほどの見込みです。VM で回すのはこれ 1 本だけなので `--threads 3` にしています（1 つは PyTorch に残す）。止まったときは、同じコマンドの代わりに次で続きから始めます（設定は前のものを引き継ぎます）。
+
+```bash
+python python/train/league.py --out runs/league_s10 --resume --threads 3
+```
+
+### 7-5 進み具合を見る
+
+```bash
+tail -n 3 runs/league_s10/log.csv
+```
+
+| 列 | 意味 | 正常な動き |
+|---|---|---|
+| `update` | 何回目の更新か | |
+| `machine_steps`、`human_steps` | その更新で機械と人間の主役が手を選んだ回数 | どちらも 0 より大きい |
+| `b1_games`、`b1_win`、`b1_lost` | B1 との局数、機械の勝率、取られた枚数／局 | 勝率は 1.0 の学習の終わりに近いところから始まり、大きく下がらない |
+| `main_games`、`main_win`、`main_taken`、`main_lost` | 人間の主役との局数、機械の勝率、取った枚数、取られた枚数 | 最初は人間がでたらめなので勝率がほぼ 1。人間が学ぶにつれて下がっていく |
+| `past_games`、`past_win` | 人間の過去の版との局数と機械の勝率 | 50 回目の更新を過ぎてから出てくる |
+| `pool` | 保存された過去の版の数 | 50 回ごとに 1 つ増える（最大 30） |
+| `steps_per_s` | 1 秒あたりの手の数（機械と人間の合計） | |
+
+10〜20 分たったら最後の 3 行を本田に送ってください。気をつけるのは 2 つです。`b1_win` が始めより大きく（たとえば半分以下に）下がり続けるときは、機械が人間の主役だけに合わせてしまっています。`main_win` が 1 時間たっても 1 に張り付いたままなら、人間側が学べていません。どちらも本田に知らせてください。
+
+### 7-6 終わったら
+
+リーグの機械（`runs/league_s10/machine.pt`）を、7-3 と同じ相手で評価します。
+
+```bash
+python python/train/evaluate.py --model runs/league_s10/machine.pt --speed-scale 1.0 --opponents b1,race,race3
+```
+
+次に、攻略役を 3 本回します。攻略役は、決まった機械だけを狙って一から学習する人間側の AI です。その機械が、弱点を探しに来る相手にどれだけ耐えるかを測ります。手書きの読み、固定の相手で学習した AI、リーグの AI のそれぞれに当てます（1 本 20〜30 分）。
+
+```bash
+python python/train/league.py --exploit read --updates 300 --threads 3 --out runs/exploit_read
+```
+
+```bash
+python python/train/league.py --exploit runs/b1_s10/model.pt --updates 300 --threads 3 --out runs/exploit_s10
+```
+
+```bash
+python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300 --threads 3 --out runs/exploit_league
+```
+
+攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。3 本の最後の 20 行の平均を比べると、どの機械がいちばん攻略されにくいかがわかります。`tail -n 20 runs/exploit_read/log.csv` などで見て、本田に送ってください。
+
+最後に、リーグの結果を push します（`runs/league_s10/log.csv`、`machine.pt`、`human.pt`。Git の節）。
+
 ## 困ったとき
 
 たいていのエラーは、Python 環境を有効にし忘れたか、実行した場所が違うかです。まず `cd ~/hasami-shogi && source ~/venv/bin/activate` を打ち直してから、下の表を見てください。
@@ -464,7 +566,9 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 | `No module named 'model'` | `model.py` が `python/train/` にない | 4-1 の git pull をやり直す。`python python/train/ppo.py` の形で実行する |
 | テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | 4-1 の 2 つのコマンドを打ち直す。直らなければ本田に知らせる |
 | `git pull` しても Already up to date で、本田が直したはずのファイルが来ない | 今いるブランチが main ではない（`git status -sb` の 1 行目でわかる） | `git pull origin main` で main の更新を取り込む（4-1） |
-| テストが `15 passed` で 1 件足りない | 古い `test_train.py` のまま | 4-1 の 2 つのコマンドを打つ |
+| テストの数が 22 より少ない | 古いプログラムのまま | 4-1 の 2 つのコマンドを打つ |
+| `git pull origin main` で `CONFLICT` と出る | 自分で直したファイルと、本田が直したファイルがぶつかった | 何もせずに出力を本田に送る（`git merge --abort` で元に戻せる） |
+| `No module named 'league'` か、リーグのテストがない | リーグを足す前のプログラムのまま | 4-1 の 2 つのコマンドを打つ |
 | `ValueError: action ... is not in its mask` | 選べない手を渡した | `model.py` の `masked_fill(~mask, -1e9)` を消していないか、別の step の mask を使っていないか確かめる |
 | `steps_per_s` が 1,000 より小さい | ほかの学習と CPU を取り合っている | 同じ VM で 2 本回すときは両方 `--threads 2` にする。`top` で動いているものを見る |
 | `win_rate` がずっと 0 | 学習が進んでいない | 5-4 を試す。Random 相手でも上がらなければ、`permute` や `nonterminal` の行を書き換えていないか確かめる |
@@ -484,12 +588,14 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 | 学習用の環境（C++、pybind11、wheel） | 作った。直すのも本田 | 使う。足りないものは本田に頼む |
 | 学習のプログラム（`python/train`） | ひな形を用意した | 使って、必要に応じて直す |
 | 学習（速さ 1.0、11/17 から） |  | 自分の VM で回す |
-| 学習（速さ 0.7 と 1.3、11/19 から） | 自分の VM で回し、`log.csv` と `model.pt` を push する |  |
+| 学習（速さ 0.7 と 1.3、11/16 から） | 自分の VM で回し、`log.csv` と `model.pt` を push する |  |
+| リーグの環境（人間側も Python から指す DuelEnv）とプログラム（`league.py`） | 作った。直すのも本田 | 使う |
+| リーグ（速さ 1.0、11/16 から）と攻略役 |  | 自分の VM で回し、評価して push する（第7章） |
 | 評価の表、学習曲線、対局の GIF（11/24 まで） |  | 3 本ぶん作る |
 | スライド | 構成を確かめる | 下書きを作る |
 | 発表で話す分担 | 2 人で決める | 2 人で決める |
 
-この期間には、人間側の学習やリーグ、参照方策への KL 正則化、制約つき PPO、整数の推論と ESP32・Web への書き出し、RaceTime を入力に入れること、模倣学習から始めることはやりません（12 月以降に回します）。VM では C++ をビルドできないので、C++ の変更と wheel の作り直しは本田がやります。
+リーグは小さな版をやります（第7章）。参照方策への KL 正則化、制約つき PPO、整数の推論と ESP32・Web への書き出し、RaceTime を入力に入れること、模倣学習から始めることはやりません（12 月以降に回します）。VM では C++ をビルドできないので、C++ の変更と wheel の作り直しは本田がやります。
 
 ### Git
 
@@ -509,6 +615,12 @@ git checkout -b train/自分の名前
 
 ```bash
 git add python/train runs/b1_s10/log.csv runs/b1_s10/model.pt && git commit -m "train: B1, speed 1.0" && git push -u origin train/自分の名前
+```
+
+リーグの結果は次のようにします。
+
+```bash
+git add runs/league_s10/log.csv runs/league_s10/machine.pt runs/league_s10/human.pt && git commit -m "league: speed 1.0" && git push -u origin train/自分の名前
 ```
 
 VM から push するには GitHub のトークンが要ります。難しければ、scp で自分のパソコンに取ってきてから、パソコンで push してください。
