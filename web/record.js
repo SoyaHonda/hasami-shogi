@@ -5,7 +5,9 @@
 // on a new driver gives the same game, tick for tick; the position at any moment (for instance when
 // the person lifted a piece) comes from the replay. No personal data is recorded.
 //
-// No DOM here: web/app.js records with it, tools/replay.mjs replays with it under Node.js.
+// No DOM here: web/app.js records with it, tools/replay.mjs replays with it under Node.js. The
+// page can also send each record to a GitHub repository with the person's own token
+// (uploadRecord), one file per game.
 //
 // A record (one JSON object per line in a .jsonl file):
 //   format   1
@@ -175,11 +177,13 @@ export function resultOf(m, sim) {
   };
 }
 
-// Saved records in the browser (IndexedDB; a list in memory when it is not available).
+// Saved records in the browser (IndexedDB; a list in memory when it is not available), and the
+// ids of those already sent to GitHub.
 export class RecordStore {
   constructor(name = 'hasami-records') {
     this.name = name;
     this.memory = [];
+    this.memorySent = new Set();
     this.db = null;
     this.ready = this.open();
   }
@@ -188,8 +192,12 @@ export class RecordStore {
     try {
       if (!globalThis.indexedDB) return;
       this.db = await new Promise((resolve, reject) => {
-        const req = indexedDB.open(this.name, 1);
-        req.onupgradeneeded = () => req.result.createObjectStore('games', { keyPath: 'id' });
+        const req = indexedDB.open(this.name, 2);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('games')) db.createObjectStore('games', { keyPath: 'id' });
+          if (!db.objectStoreNames.contains('sent')) db.createObjectStore('sent', { keyPath: 'id' });
+        };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       });
@@ -198,12 +206,13 @@ export class RecordStore {
     }
   }
 
-  async tx(mode, f) {
+  // f(objectStore) inside a transaction on `name`; f(null) without IndexedDB.
+  async tx(name, mode, f) {
     await this.ready;
     if (!this.db) return f(null);
     return new Promise((resolve, reject) => {
-      const t = this.db.transaction('games', mode);
-      const store = t.objectStore('games');
+      const t = this.db.transaction(name, mode);
+      const store = t.objectStore(name);
       let out;
       Promise.resolve(f(store)).then((v) => (out = v));
       t.oncomplete = () => resolve(out);
@@ -212,9 +221,17 @@ export class RecordStore {
     });
   }
 
+  static getAll(s) {
+    return new Promise((resolve, reject) => {
+      const req = s.getAll();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
   async add(rec) {
     try {
-      await this.tx('readwrite', (s) => (s ? s.put(rec) : this.memory.push(rec)));
+      await this.tx('games', 'readwrite', (s) => (s ? s.put(rec) : this.memory.push(rec)));
     } catch {
       this.memory.push(rec);
     }
@@ -222,27 +239,95 @@ export class RecordStore {
 
   async all() {
     try {
-      const fromDb = await this.tx('readonly', (s) =>
-        s
-          ? new Promise((resolve, reject) => {
-              const req = s.getAll();
-              req.onsuccess = () => resolve(req.result);
-              req.onerror = () => reject(req.error);
-            })
-          : [],
-      );
+      const fromDb = await this.tx('games', 'readonly', (s) => (s ? RecordStore.getAll(s) : []));
       return [...(fromDb || []), ...this.memory].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     } catch {
       return [...this.memory];
     }
   }
 
+  async markSent(id) {
+    this.memorySent.add(id);
+    try {
+      await this.tx('sent', 'readwrite', (s) => s && s.put({ id }));
+    } catch {
+      /* kept in memory */
+    }
+  }
+
+  async sentIds() {
+    try {
+      const rows = await this.tx('sent', 'readonly', (s) => (s ? RecordStore.getAll(s) : []));
+      return new Set([...(rows || []).map((r) => r.id), ...this.memorySent]);
+    } catch {
+      return new Set(this.memorySent);
+    }
+  }
+
+  // Forgets the records (the sent marks stay, so that a record is never sent twice).
   async clear() {
     this.memory = [];
     try {
-      await this.tx('readwrite', (s) => s && s.clear());
+      await this.tx('games', 'readwrite', (s) => s && s.clear());
     } catch {
       /* nothing more to clear */
     }
   }
+}
+
+// ---- Sending records to a GitHub repository (the person's own token, kept in their browser).
+
+// The file of a record in the repository: <dir>/<day>/<date>-<id>.json (one line, as in .jsonl).
+export function recordPath(rec, dir = 'games') {
+  const d = dir.replace(/^\/+|\/+$/g, '');
+  const day = String(rec.date).slice(0, 10);
+  const stamp = String(rec.date).replace(/[:.]/g, '-');
+  return `${d ? d + '/' : ''}${day}/${stamp}-${rec.id}.json`;
+}
+
+function base64Utf8(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+// Creates the record's file through the GitHub contents API. cfg: { repo: "owner/name", token,
+// branch, dir }. The commit message carries [skip ci] (no workflow runs for it). A file that is
+// already there counts as sent (the same record sent before). Returns { ok, status, message }.
+export async function uploadRecord(rec, cfg, fetchImpl = globalThis.fetch) {
+  const repo = String(cfg.repo || '').trim();
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return { ok: false, status: 0, message: 'リポジトリは owner/name の形で書いてください' };
+  if (!cfg.token) return { ok: false, status: 0, message: 'トークンがありません' };
+  const path = recordPath(rec, cfg.dir ?? 'games');
+  const body = { message: `game ${rec.id} [skip ci]`, content: base64Utf8(JSON.stringify(rec) + '\n') };
+  if (cfg.branch) body.branch = cfg.branch;
+  let res;
+  try {
+    res = await fetchImpl(`https://api.github.com/repos/${repo}/contents/${path.split('/').map(encodeURIComponent).join('/')}`, {
+      method: 'PUT',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${cfg.token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    return { ok: false, status: 0, message: `送れませんでした（${e && e.message ? e.message : e}）` };
+  }
+  if (res.status === 200 || res.status === 201) return { ok: true, status: res.status, message: path };
+  let detail = '';
+  try {
+    detail = (await res.json()).message || '';
+  } catch {
+    /* no JSON body */
+  }
+  if (res.status === 422 && /sha/i.test(detail)) return { ok: true, status: 422, message: `${path}（送信済み）` };
+  const hint =
+    res.status === 401 ? 'トークンが正しくないか、期限が切れています'
+    : res.status === 403 || res.status === 404 ? 'リポジトリの名前か、トークンの権限（Contents の読み書き）を確かめてください'
+    : `GitHub が ${res.status} を返しました`;
+  return { ok: false, status: res.status, message: `${hint}${detail ? `（${detail}）` : ''}` };
 }

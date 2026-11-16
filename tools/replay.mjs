@@ -1,6 +1,7 @@
 // Replays game records of the simulator (web/record.js) with the WASM build of lib/core.
 //
 //   node tools/replay.mjs data/games/*.jsonl                       # check every record
+//   node tools/replay.mjs ../hasami-games/games                    # a folder: every .json/.jsonl in it
 //   node tools/replay.mjs data/games/*.jsonl --moves moves.jsonl   # and write the person's moves
 //
 // Each record is replayed on a new driver and its end compared with the record's own result
@@ -12,14 +13,23 @@
 // pieces with cooldowns, head, the machine's job, captures), the square lifted and the square the
 // piece was put on (its origin for a cancel; null when it never came down, e.g. the hold limit).
 // Needs web/hasami.js (npm run build:wasm).
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadHasami } from './load-wasm.mjs';
 import { enumName, replay, resultOf } from '../web/record.js';
 
 const args = process.argv.slice(2);
 const movesAt = args.indexOf('--moves');
 const movesPath = movesAt >= 0 ? args[movesAt + 1] : null;
-const files = args.filter((a, i) => movesAt < 0 || (i !== movesAt && i !== movesAt + 1));
+// Folders are read whole: every .json (one record, as the page sends them) and .jsonl in them.
+function expand(path) {
+  if (!statSync(path).isDirectory()) return [path];
+  return readdirSync(path)
+    .sort()
+    .flatMap((f) => expand(join(path, f)))
+    .filter((f) => f.endsWith('.json') || f.endsWith('.jsonl'));
+}
+const files = args.filter((a, i) => movesAt < 0 || (i !== movesAt && i !== movesAt + 1)).flatMap(expand);
 if (!files.length) {
   console.error('usage: node tools/replay.mjs FILE.jsonl... [--moves OUT.jsonl]');
   process.exit(2);
