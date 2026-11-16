@@ -494,7 +494,7 @@ python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0
 python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0 --opponents b1,race,race3
 ```
 
-10 分ほどで 6 行（相手ごとに今の読みと学習した AI）が出ます。それを本田に送り、`runs/b1_s10` を push します（Git の節）。
+10 分ほどで 6 行（相手ごとに今の読みと学習した AI）が出ます。発表の表に使うので控えておき、`runs/b1_s10` を push します（Git の節）。
 
 ### 7-4 リーグを始める
 
@@ -528,7 +528,7 @@ tail -n 3 runs/league_s10/log.csv
 | `pool` | 保存された過去の版の数 | 50 回ごとに 1 つ増える（最大 30） |
 | `steps_per_s` | 1 秒あたりの手の数（機械と人間の合計） | |
 
-10〜20 分たったら最後の 3 行を本田に送ってください。気をつけるのは 2 つです。`b1_win` が始めより大きく（たとえば半分以下に）下がり続けるときは、機械が人間の主役だけに合わせてしまっています。`main_win` が 1 時間たっても 1 に張り付いたままなら、人間側が学べていません。どちらも本田に知らせてください。
+10〜20 分たったら最後の 3 行を見て、表の「正常な動き」と比べます。気をつけるのは 2 つです。`b1_win` が始めより大きく（たとえば半分以下に）下がり続けるときは、機械が人間の主役だけに合わせてしまっています。`main_win` が 1 時間たっても 1 に張り付いたままなら、人間側が学べていません。どちらかが起きたら、tmux の画面で Ctrl+c を押してリーグを止めます。
 
 ### 7-6 終わったら
 
@@ -552,7 +552,7 @@ python python/train/league.py --exploit runs/b1_s10/model.pt --updates 300 --thr
 python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300 --threads 3 --out runs/exploit_league
 ```
 
-攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。3 本の最後の 20 行の平均を比べると、どの機械がいちばん攻略されにくいかがわかります。`tail -n 20 runs/exploit_read/log.csv` などで見て、本田に送ってください。
+攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。3 本の最後の 20 行の平均を比べると、どの機械がいちばん攻略されにくいかがわかります。`tail -n 20 runs/exploit_read/log.csv` などで見て、発表の表にします。
 
 最後に、リーグの結果を push します（`runs/league_s10/log.csv`、`machine.pt`、`human.pt`。Git の節）。
 
@@ -564,10 +564,10 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 | --- | --- | --- |
 | `No module named 'hasami_env'` か `No module named 'hasami_env._core'` | Python 環境が有効でない、wheel を入れていない、`python` フォルダーの中で実行した | `~/hasami-shogi` で実行する。1-3 をやり直す。`PYTHONPATH` に `python/` を入れない |
 | `No module named 'model'` | `model.py` が `python/train/` にない | 4-1 の git pull をやり直す。`python python/train/ppo.py` の形で実行する |
-| テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | 4-1 の 2 つのコマンドを打ち直す。直らなければ本田に知らせる |
+| テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | 4-1 の 2 つのコマンドを打ち直す |
 | `git pull` しても Already up to date で、本田が直したはずのファイルが来ない | 今いるブランチが main ではない（`git status -sb` の 1 行目でわかる） | `git pull origin main` で main の更新を取り込む（4-1） |
 | テストの数が 22 より少ない | 古いプログラムのまま | 4-1 の 2 つのコマンドを打つ |
-| `git pull origin main` で `CONFLICT` と出る | 自分で直したファイルと、本田が直したファイルがぶつかった | 何もせずに出力を本田に送る（`git merge --abort` で元に戻せる） |
+| `git pull origin main` で `CONFLICT` と出る | 自分で直したファイルと、本田が直したファイルがぶつかった | `git merge --abort` で取り込む前に戻す。自分で直したファイルを別の名前で写しておき、`git checkout -- ファイル名` で元に戻してから、4-1 をやり直す |
 | `No module named 'league'` か、リーグのテストがない | リーグを足す前のプログラムのまま | 4-1 の 2 つのコマンドを打つ |
 | `ValueError: action ... is not in its mask` | 選べない手を渡した | `model.py` の `masked_fill(~mask, -1e9)` を消していないか、別の step の mask を使っていないか確かめる |
 | `steps_per_s` が 1,000 より小さい | ほかの学習と CPU を取り合っている | 同じ VM で 2 本回すときは両方 `--threads 2` にする。`top` で動いているものを見る |
@@ -577,7 +577,6 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 | 学習が途中で止まった（VM を止めたなど） | VM を止めると tmux の中も止まる | `--out` を同じにして `--resume` を付けると、50 回ごとに保存した `checkpoint.pt` から続く（5-1）。50 回目より前に止まったときは最初からやり直す |
 | `No space left on device` | ディスクがいっぱい | `df -h` と `du -sh runs/*` で確かめ、要らない `runs` の中身を消す |
 
-表にないことは、出たエラーを丸ごと写して、本田に送ってください。
 
 ## 決まりごと
 
