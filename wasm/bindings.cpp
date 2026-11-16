@@ -196,6 +196,21 @@ val botToVal(const BotParams& b) {
 val officialRulesVal() { return rulesToVal(officialRules()); }
 
 // {rules, params, bot}: the C++ defaults.
+#ifndef HASAMI_CORE_HASH
+#define HASAMI_CORE_HASH "unknown"
+#endif
+#ifndef HASAMI_COMMIT
+#define HASAMI_COMMIT "unknown"
+#endif
+
+// What this build is made of (tools/build-wasm.mjs), kept in the game records (web/record.js).
+val buildInfo() {
+  val o = val::object();
+  o.set("coreHash", std::string(HASAMI_CORE_HASH));
+  o.set("commit", std::string(HASAMI_COMMIT));
+  return o;
+}
+
 val defaults() {
   val o = val::object();
   o.set("rules", rulesToVal(Rules()));
@@ -412,6 +427,7 @@ EMSCRIPTEN_BINDINGS(hasami) {
       .function("clockMs", &JsSim::clockMs);
 
   function("defaults", &defaults);
+  function("buildInfo", &buildInfo);
   function("officialRules", &officialRulesVal);
   function("thinkCase", &thinkCase);
 }

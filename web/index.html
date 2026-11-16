@@ -153,6 +153,16 @@
       <ol class="log" id="log"><li class="empty">対局が始まると、取った駒と機械の先回りがここに残ります。</li></ol>
     </section>
 
+    <section class="box" aria-label="棋譜">
+      <h2>棋譜</h2>
+      <p class="note">このブラウザーに保存した対局 <b id="recCount">0</b> 局</p>
+      <div class="btns">
+        <button class="btn" id="recDownload" disabled>ダウンロード（.jsonl）</button>
+        <button class="btn ghost" id="recClear">すべて消す</button>
+      </div>
+      <p class="note">駒を一度でも動かした対局は、終わったとき（途中で新しい対局を始めたときも）にこのブラウザーの中に保存されます。外のサーバーには送りません（手元で <code>npm run serve</code> から開いたときだけ、手元の <code>logs/</code> にも書きます）。名前などの個人の情報は入りません。入るのは、ルールと設定、駒を持ち上げて置いた時刻とマス、対局を再現するための時間の刻みです。学習に使うときは、ダウンロードしたファイルをリポジトリの <code>data/games/</code> に置いてください。</p>
+    </section>
+
     <section class="box" aria-label="ルールの要点">
       <h2>遊び方</h2>
       <ul class="rules">

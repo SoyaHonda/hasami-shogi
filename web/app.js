@@ -1,6 +1,7 @@
 // Screen of the simulator (ported from sim/hasami-sim.html). All game logic lives in the WASM
 // SimDriver (lib/core); this file only draws state() and forwards clicks and settings.
 import createModule from './hasami.js';
+import { Recorder, RecordStore } from './record.js';
 
 const m = await createModule();
 const { Phase, Winner, Level, PlaceResult, EventKind } = m;
@@ -14,7 +15,15 @@ const boardEl = $('board'), cellsEl = $('cells'), layerEl = $('layer'), overlayE
 const D = m.defaults();
 const rules = m.officialRules(); // RE + RW + RU40; each can be turned off below
 const params = { ...D.params };
-const sim = new m.SimDriver(rules, params, (Date.now() >>> 0) || 1);
+// A new driver for every game, so that a game's record replays from a fresh driver (record.js).
+let seedCount = 0;
+const nextSeed = () => ((Date.now() + 7919 * ++seedCount) >>> 0) || 1;
+let simSeed = nextSeed();
+let sim = new m.SimDriver(rules, params, simSeed);
+
+// Game records (record.js): kept in this browser, downloadable; sent to `npm run serve` too.
+const store = new RecordStore();
+let rec = null; // the Recorder of the game being played, if any
 
 let S = sim.state();
 let N = S.n;
@@ -36,8 +45,12 @@ function frame(now) {
   acc += dt;
   const step = Math.floor(acc);
   acc -= step;
-  if (step > 0) sim.advance(step);
+  if (step > 0) {
+    sim.advance(step);
+    if (rec) rec.advance(step);
+  }
   S = sim.state();
+  if (rec && is(S.phase, Phase.Over)) endRecord('over');
   if (is(S.phase, Phase.Countdown)) {
     if (!is(prevPhase, Phase.Countdown)) {
       const fresh = is(prevPhase, Phase.Ready) || is(prevPhase, Phase.Over);
@@ -88,9 +101,9 @@ function drop(e, cancelled) {
   const h = heldPiece();
   if (!moved || !h || h.id !== id) return;
   const cell = cancelled ? null : cellFromEvent(e);
-  const res = cell ? sim.place(cell[0], cell[1]) : null;
+  const res = cell ? place(cell[0], cell[1]) : null;
   // Pending stays as it is: the piece lands once the placement interval has passed.
-  if (!res || is(res, PlaceResult.Illegal)) sim.place(h.r, h.c);
+  if (!res || is(res, PlaceResult.Illegal)) place(h.r, h.c);
   S = sim.state();
 }
 boardEl.addEventListener('pointerup', (e) => drop(e, false));
@@ -109,15 +122,15 @@ boardEl.addEventListener('pointerdown', (e) => {
     return;
   }
   if (!h) {
-    sim.lift(r, c);
+    lift(r, c);
   } else {
     // place() on the origin square cancels the lift (SimDriver/Game decide).
-    const res = sim.place(r, c);
+    const res = place(r, c);
     // As in the original: clicking another of your pieces that is not cooling down switches to it.
     const other = S.pieces.find((q) => q.alive && !q.held && q.side === HUMAN && q.r === r && q.c === c);
     if (is(res, PlaceResult.Illegal) && other && other.cooldownLeft <= 0) {
-      const back = sim.place(h.r, h.c);
-      if (is(back, PlaceResult.Ok) || is(back, PlaceResult.Cancelled)) sim.lift(r, c);
+      const back = place(h.r, h.c);
+      if (is(back, PlaceResult.Ok) || is(back, PlaceResult.Cancelled)) lift(r, c);
     }
   }
   S = sim.state();
@@ -136,13 +149,25 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const h = heldPiece();
   if (h) {
-    sim.place(h.r, h.c);
+    place(h.r, h.c);
     S = sim.state();
   }
 });
+// The person's lift and place, recorded.
+function lift(r, c) {
+  const res = sim.lift(r, c);
+  if (rec) rec.lift(r, c, res);
+  return res;
+}
+function place(r, c) {
+  const res = sim.place(r, c);
+  if (rec) rec.place(r, c, res);
+  return res;
+}
 
 /* ---------- game control ---------- */
 function resetGame() {
+  if (rec) endRecord('abandoned');
   sim.reset();
   afterReset();
 }
@@ -157,22 +182,31 @@ function afterReset() {
   build();
 }
 function start() {
-  const ph = sim.phase();
-  if (is(ph, Phase.Ready) || is(ph, Phase.Over)) {
-    sim.start(); // resets inside
-    const was = prevPhase;
-    afterReset();
-    prevPhase = was; // keep Ready/Over so the countdown length is the fresh one
-  } else {
-    // As in the original: start during a game begins a new one.
-    sim.reset();
-    afterReset();
-    sim.start();
-  }
+  // As in the original: start during a game begins a new one. Every game gets a new driver.
+  if (rec) endRecord('abandoned');
+  sim.delete();
+  simSeed = nextSeed();
+  sim = new m.SimDriver(rules, params, simSeed);
+  rec = new Recorder(m, { rules, params, seed: simSeed });
+  sim.start();
+  afterReset();
+  prevPhase = Phase.Ready; // the countdown length is the fresh one
   S = sim.state();
 }
 function togglePause() {
   sim.togglePause();
+  if (rec) rec.togglePause();
+}
+// Keeps the record of the game on the board (unless the person never lifted a piece).
+function endRecord(end) {
+  const r = rec;
+  rec = null;
+  if (!r.touched) return;
+  const done = r.finish(end, sim.state());
+  store.add(done).then(showRecordCount);
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    fetch('/api/games', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(done) }).catch(() => {});
+  }
 }
 
 /* ---------- view ---------- */
@@ -469,6 +503,7 @@ $('pauseBtn').onclick = togglePause;
 // Board size and target: setRules, then reset. Other rules apply from the next game.
 function applyRules(resetNow) {
   sim.setRules(rules);
+  if (rec) rec.setRules(rules);
   if (resetNow || is(sim.phase(), Phase.Ready)) resetGame();
 }
 function setN(n) {
@@ -550,7 +585,10 @@ function bindRange(id, get, set, fmtF) {
   el.oninput = f;
   out.textContent = fmtF(parseFloat(el.value));
 }
-const applyParams = () => sim.setParams(params);
+const applyParams = () => {
+  sim.setParams(params);
+  if (rec) rec.setParams(params);
+};
 bindRange('hCd', () => rules.humanCooldownMs / 1000, (v) => { rules.humanCooldownMs = Math.round(v * 1000); applyRules(false); }, (v) => v.toFixed(1) + ' 秒');
 bindRange('mCd', () => rules.machineCooldownMs / 1000, (v) => { rules.machineCooldownMs = Math.round(v * 1000); applyRules(false); }, (v) => v.toFixed(1) + ' 秒');
 bindRange('hGap', () => rules.humanIntervalMs / 1000, (v) => { rules.humanIntervalMs = Math.round(v * 1000); applyRules(false); }, (v) => v.toFixed(1) + ' 秒');
@@ -576,6 +614,35 @@ for (const [l, id] of lv)
     showLevel();
   };
 showLevel();
+
+/* ---------- game records ---------- */
+async function showRecordCount() {
+  const all = await store.all();
+  $('recCount').textContent = String(all.length);
+  $('recDownload').disabled = all.length === 0;
+}
+$('recDownload').onclick = async () => {
+  const all = await store.all();
+  if (!all.length) return;
+  const blob = new Blob([all.map((r) => JSON.stringify(r)).join('\n') + '\n'], { type: 'application/x-ndjson' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `hasami-games-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.jsonl`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+$('recClear').onclick = async () => {
+  if (!confirm('このブラウザーに保存した棋譜をすべて消します。先にダウンロードしましたか？')) return;
+  await store.clear();
+  showRecordCount();
+};
+// A game in progress is kept when the page is left.
+addEventListener('pagehide', () => {
+  if (rec) endRecord('abandoned');
+});
+showRecordCount();
 
 build();
 requestAnimationFrame(frame);
