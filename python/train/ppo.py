@@ -1,6 +1,13 @@
 """PPO で機械側を学習する（python/train/ppo.py）。
 
     python python/train/ppo.py --opponent b1 --speed-scale 1.0 --out runs/b1_s10
+    python python/train/ppo.py --out runs/b1_s10 --resume     # 止まった学習を続きから
+
+Every 50 updates and at the end it saves model.pt (the network alone, what evaluate.py and
+record_game.py read) and checkpoint.pt (network, optimizer, learning-rate schedule, update count and
+settings). --resume picks up from checkpoint.pt with the run's own settings; only --threads, and
+--steps to lengthen the run, may be given anew. The games restart from fresh seeds, and the rows of
+log.csv after the checkpoint are dropped, since those updates are done again.
 
 The settings default to those of plan 2026-11-06 3.9 (256 environments, 128 decision points per
 rollout, 4 epochs, minibatch 4096, clip 0.2, learning rate 3e-4 decaying linearly, entropy 0.01,
@@ -39,12 +46,22 @@ def to_dev(dev, *arrays):
     return [torch.from_numpy(a).to(dev) for a in arrays]
 
 
+# --resume で引き継ぐ設定（--threads と --out は引き継がず、--steps は指定すれば変えられる）
+RUN_SETTINGS = ["opponent", "speed_scale", "capture_reward", "steps", "envs", "rollout", "epochs", "minibatch", "seed"]
+
+
+def save_atomic(obj, path):
+    """書いている途中で VM が止まっても、前のファイルが壊れないように一度別名で書いてから置き換える。"""
+    torch.save(obj, path + ".tmp")
+    os.replace(path + ".tmp", path)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--opponent", default="b1")  # b1 | race | random
     p.add_argument("--speed-scale", type=float, default=1.0)
     p.add_argument("--capture-reward", type=float, default=0.2)
-    p.add_argument("--steps", type=float, default=30e6)  # 学習に使う決定点の合計
+    p.add_argument("--steps", type=float, default=None)  # 学習に使う決定点の合計（既定 3,000 万）
     p.add_argument("--threads", type=int, default=3)
     p.add_argument("--out", default="runs/b1_s10")
     p.add_argument("--envs", type=int, default=256)  # 環境の数
@@ -52,26 +69,61 @@ def main(argv=None):
     p.add_argument("--epochs", type=int, default=4)
     p.add_argument("--minibatch", type=int, default=4096)
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--resume", action="store_true", help="--out の checkpoint.pt から続ける")
     a = p.parse_args(argv)
-    os.makedirs(a.out, exist_ok=True)
     dev = "cuda" if torch.cuda.is_available() else "cpu"
-    torch.manual_seed(a.seed)
+    ckpt_path = os.path.join(a.out, "checkpoint.pt")
+    ckpt = None
+    if a.resume:
+        if not os.path.exists(ckpt_path):
+            raise SystemExit(f"{ckpt_path} がありません（50 回目の更新より前に止まった学習は、最初からやり直してください）")
+        ckpt = torch.load(ckpt_path, map_location=dev, weights_only=False)
+        steps = a.steps
+        for k in RUN_SETTINGS:
+            setattr(a, k, ckpt["args"][k])
+        if steps is not None:
+            a.steps = steps
+        print(f"resume: {ckpt_path} の {ckpt['update']} 回目の更新から（" +
+              ", ".join(f"{k}={getattr(a, k)}" for k in RUN_SETTINGS) + "）", flush=True)
+    if a.steps is None:
+        a.steps = 30e6
+    os.makedirs(a.out, exist_ok=True)
+    start = ckpt["update"] if ckpt else 0
+    torch.manual_seed(a.seed + start)
     N, T, EPOCHS = a.envs, a.rollout, a.epochs
     MB = min(a.minibatch, N * T)
 
-    env = hasami_env.BatchEnv(n_envs=N, seed=a.seed, opponent=a.opponent, speed_scale=a.speed_scale,
+    # 続きからのときは、前と同じ局をくり返さないように種をずらす
+    env = hasami_env.BatchEnv(n_envs=N, seed=a.seed + start * N, opponent=a.opponent, speed_scale=a.speed_scale,
                               capture_reward=a.capture_reward, n_threads=a.threads, track_activity=False)
     net = Net().to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=3e-4)
     updates = max(1, int(a.steps // (N * T)))
-    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda u: 1 - u / updates)  # 学習率を線形に下げる
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda u: max(0.0, 1 - u / updates))  # 学習率を線形に下げる
+    if ckpt:
+        net.load_state_dict(ckpt["net"])
+        opt.load_state_dict(ckpt["opt"])
+        sched.load_state_dict(ckpt["sched"])
+        if start >= updates:
+            raise SystemExit(f"もう {start} 回の更新が済んでいます（--steps {a.steps:.0f} は {updates} 回）。長くするなら --steps を大きくしてください")
 
-    log_file = open(os.path.join(a.out, "log.csv"), "w", newline="")
-    log = csv.writer(log_file)
-    log.writerow(["update", "steps", "games", "win_rate", "taken", "lost", "game_min", "steps_per_s"])
+    log_path = os.path.join(a.out, "log.csv")
+    header = ["update", "steps", "games", "win_rate", "taken", "lost", "game_min", "steps_per_s"]
+    if ckpt:
+        # checkpoint より後の行は、これからやり直す更新なので捨てる
+        with open(log_path, newline="") as f:
+            rows = [r for r in csv.reader(f)][1:]
+        rows = [r for r in rows if r and int(r[0]) <= start]
+        log_file = open(log_path, "w", newline="")
+        log = csv.writer(log_file)
+        log.writerows([header] + rows)
+    else:
+        log_file = open(log_path, "w", newline="")
+        log = csv.writer(log_file)
+        log.writerow(header)
     obs, scal, mask = env.reset()
     t0 = time.time()
-    for u in range(updates):
+    for u in range(start, updates):
         # 1) 集める: T 回 step して、学習に使う材料をためる
         B = {k: [] for k in ["obs", "scal", "mask", "act", "logp", "val", "rew", "dt", "done"]}
         games = wins = taken = lost = game_ms = 0
@@ -128,13 +180,16 @@ def main(argv=None):
         # 4) 記録する
         steps = (u + 1) * N * T
         g = max(games, 1)
-        row = [u + 1, steps, games, wins / g, taken / g, lost / g, game_ms / g / 60000, steps / (time.time() - t0)]
+        rate = (u + 1 - start) * N * T / (time.time() - t0)  # この実行で進んだ分の速さ
+        row = [u + 1, steps, games, wins / g, taken / g, lost / g, game_ms / g / 60000, rate]
         log.writerow(row)
         log_file.flush()
         print(f"update {u + 1}/{updates}  steps {steps}  games {games}  win {wins / g:.3f}  "
               f"taken {taken / g:.2f}  lost {lost / g:.2f}  {row[-1]:.0f} steps/s", flush=True)
         if (u + 1) % 50 == 0 or u + 1 == updates:
-            torch.save(net.state_dict(), os.path.join(a.out, "model.pt"))
+            save_atomic(net.state_dict(), os.path.join(a.out, "model.pt"))
+            save_atomic({"update": u + 1, "net": net.state_dict(), "opt": opt.state_dict(),
+                         "sched": sched.state_dict(), "args": {k: getattr(a, k) for k in RUN_SETTINGS}}, ckpt_path)
 
 
 if __name__ == "__main__":
