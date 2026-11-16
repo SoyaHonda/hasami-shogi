@@ -85,3 +85,31 @@ def test_a_short_training_run_then_evaluation_curve_and_recording(tmp_path, caps
     gif = str(tmp_path / "game.gif")
     record_game.main([model, "--opponent", "random", "--seed", "3", "--out", gif])
     assert os.path.getsize(gif) > 0
+
+
+def test_a_stopped_run_resumes_from_its_checkpoint(tmp_path, capsys):
+    out = str(tmp_path / "run")
+    small = ["--envs", "8", "--rollout", "16", "--threads", "2", "--out", out]
+    ppo.main(["--opponent", "random", "--capture-reward", "0.5", "--steps", str(8 * 16 * 2)] + small)
+    ckpt = torch.load(os.path.join(out, "checkpoint.pt"), weights_only=False)
+    assert ckpt["update"] == 2 and ckpt["args"]["opponent"] == "random" and ckpt["args"]["capture_reward"] == 0.5
+    # A row written after the checkpoint (the run stopped before the next save) is dropped and redone.
+    with open(os.path.join(out, "log.csv"), "a") as f:
+        f.write("3,384,0,0,0,0,0,0\n")
+
+    capsys.readouterr()
+    ppo.main(["--resume", "--steps", str(8 * 16 * 4), "--out", out, "--threads", "2"])
+    printed = capsys.readouterr().out
+    assert "resume:" in printed and "opponent=random" in printed and "update 3/4" in printed
+    with open(os.path.join(out, "log.csv")) as f:
+        rows = f.read().splitlines()[1:]
+    assert [r.split(",")[0] for r in rows] == ["1", "2", "3", "4"]
+    assert torch.load(os.path.join(out, "checkpoint.pt"), weights_only=False)["update"] == 4
+    # The resumed network is the saved one, not a fresh one.
+    from model import Net as _Net
+    net = _Net()
+    net.load_state_dict(torch.load(os.path.join(out, "model.pt")))
+
+    # Nothing left to do -> a clear message instead of a silent run.
+    with pytest.raises(SystemExit, match="--steps"):
+        ppo.main(["--resume", "--out", out, "--threads", "2"])

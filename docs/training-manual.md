@@ -100,7 +100,7 @@ python -m pytest python
 次のように出れば成功です。`/home/...` と `SOURCE_HASH` のあとは、人や時期によって違います。
 
 ```text
-hasami_env: not built here, from /home/u.../venv/lib/python3.12/site-packages/hasami_env, SOURCE_HASH 06840d7e26bafd9f
+hasami_env: not built here, from /home/u.../venv/lib/python3.12/site-packages/hasami_env, SOURCE_HASH ec571ae24a35775a
 collected 11 items
 
 python/tests/test_env.py ...........   [100%]
@@ -249,7 +249,7 @@ python -m pytest python
 | 1) 集める | 256 局で 128 回ずつ手を選び、局面・手・報酬・時間をためる（合わせて 32,768 個） |
 | 2) アドバンテージ | 各手がどれだけ良かったかを、時間で割り引いて計算する（120 秒先の報酬は半分） |
 | 3) 更新する | ためたデータを 4,096 個ずつに分け、4 回くり返してネットを少しずつ直す |
-| 4) 記録する | 勝率などを `log.csv` に書き、50 回ごとと最後に `model.pt` を保存する |
+| 4) 記録する | 勝率などを `log.csv` に書き、50 回ごとと最後に `model.pt`（評価に使うネット）と `checkpoint.pt`（続きから学習するためのもの）を保存する |
 
 中身は `less python/train/ppo.py` で読めます（q で終わる）。設定値（環境 256、集める長さ 128、エポック 4、ミニバッチ 4096、学習率 3e-4、クリップ 0.2、エントロピー 0.01）はプロジェクトの計画の値です。まずはこのまま使ってください。`--envs` や `--rollout` などで変えられます。
 
@@ -286,6 +286,12 @@ cd ~/hasami-shogi && source ~/venv/bin/activate && python python/train/ppo.py --
 ```
 
 `update 1/915` のような行が出始めたら、Ctrl+b を押してから d を押して画面を抜けます。学習は続きます。画面に戻るときは `tmux attach -t train` です。
+
+VM が止まるなどして学習が途中で止まったときは、tmux の画面を開き直して、次のコマンドで続きから学習できます。最後に保存した更新（50 回ごと）から始まり、相手や速さなどの設定は前の学習のものを引き継ぎます。保存より後に進んでいた分（最大 50 回の更新、10 分ほど）はやり直しになります。
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && python python/train/ppo.py --out runs/b1_s10 --resume
+```
 
 ### 5-2 進み具合を見る
 
@@ -453,7 +459,7 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 | `win_rate` がずっと 0 | 学習が進んでいない | 5-4 を試す。Random 相手でも上がらなければ、`permute` や `nonterminal` の行を書き換えていないか確かめる |
 | `torch.cuda.is_available()` が False | Python 環境が有効でない | `source ~/venv/bin/activate`。それでも False なら `nvidia-smi` の出力を TA に送る |
 | SSH が切れた | ネットワーク | tmux の中なら学習は続いている。つなぎ直して `tmux attach -t train` |
-| 学習が途中で止まった（VM を止めたなど） | VM を止めると tmux の中も止まる | 50 回ごとに保存された `model.pt` は評価に使える。続きから学習するには `ppo.py` に読み込みを足す必要があるので、本田に相談する |
+| 学習が途中で止まった（VM を止めたなど） | VM を止めると tmux の中も止まる | `--out` を同じにして `--resume` を付けると、50 回ごとに保存した `checkpoint.pt` から続く（5-1）。50 回目より前に止まったときは最初からやり直す |
 | `No space left on device` | ディスクがいっぱい | `df -h` と `du -sh runs/*` で確かめ、要らない `runs` の中身を消す |
 
 表にないことは、出たエラーを丸ごと写して、本田に送ってください。
