@@ -188,6 +188,9 @@ void HumanBot::reset() {
   now_ = 0;
   openArmed_ = false;
   openNextAt_ = 0;
+  extAwaiting_ = false;
+  extHas_ = false;
+  extMove_ = BotMove{BotMove::None, -1, -1, -1};
 }
 
 uint32_t HumanBot::moveTime(const Game& game) {
@@ -277,6 +280,13 @@ BotMove HumanBot::choose(const Game& game, float headR, float headC) {
       return chooseRace(game, headR, headC, false);
     case BotStyle::Race3:
       return chooseRace(game, headR, headC, true);
+    case BotStyle::External:
+      if (extHas_) {
+        extHas_ = false;
+        return extMove_;
+      }
+      extAwaiting_ = true;
+      return BotMove{BotMove::Wait, -1, -1, -1};
   }
   return BotMove{BotMove::None, -1, -1, -1};
 }
@@ -525,7 +535,8 @@ BotAction HumanBot::decide(const Game& game, float headR, float headC, uint32_t 
 
   const BotMove m = choose(game, headR, headC);
   if (m.kind != BotMove::Move && m.kind != BotMove::Random) {
-    nextAt_ = clock + 100;  // look again shortly
+    if (extAwaiting_) return none;  // External: asked; due again as soon as a move is given
+    nextAt_ = clock + (params_.style == BotStyle::External ? params_.externalWaitMs : 100u);  // look again shortly
     return none;
   }
   return liftFor(game, m);
@@ -580,7 +591,8 @@ BotAction HumanBot::decideOpening(const Game& game, float headR, float headC, ui
   if (static_cast<int32_t>(now - openNextAt_) < 0) return none;
   const BotMove m = choose(game, headR, headC);
   if (m.kind != BotMove::Move && m.kind != BotMove::Random) {
-    openNextAt_ = now + 100;
+    if (extAwaiting_) return none;
+    openNextAt_ = now + (params_.style == BotStyle::External ? params_.externalWaitMs : 100u);
     return none;
   }
   return liftFor(game, m);
@@ -603,6 +615,17 @@ BotAction HumanBot::putDown(const Game& game, float headR, float headC) {
     if (ne == 0) return none;
     const int e = empty[rng_.below(ne)];
     return BotAction{BotAction::Place, e / n, e % n};
+  }
+  if (params_.style == BotStyle::External) {
+    // The chosen square while it is legal; otherwise back to the origin (an empty origin is
+    // among the legal destinations only when reachable, so check it directly), else any
+    // legal destination.
+    if (failures_ == 0)
+      for (int i = 0; i < k; i++)
+        if (planR_ >= 0 && d[i] == planR_ * n + planC_) return BotAction{BotAction::Place, planR_, planC_};
+    if (failures_ == 0 && b.at(p.r, p.c) == EMPTY) return BotAction{BotAction::Place, p.r, p.c};
+    const int to = d[rng_.below(k)];
+    return BotAction{BotAction::Place, to / n, to % n};
   }
   // Capture check on the real board (the reserved square is not a machine piece yet).
   const Board bb = game.boardWithoutHeld();

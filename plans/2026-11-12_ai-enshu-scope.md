@@ -150,6 +150,9 @@ TA の助言は 3 つ: 人間を模したボットに勝つのは一区切りな
 - 人間の報酬（11/06 計画 3.3）: 勝ち +1、負け −1、引き分け 0、取った枚数の差（人間 − 機械）が 1 枚変わるごとに ±capture_reward。引き分けの罰はない（ゼロ和にしない）。割引は機械と同じく時間で、半減期 120 秒。
 - `step(actions)` は、各環境で今手番の側（`side`: 0 機械、1 人間）の行動を受け取り、どちらかの側の次の決定点まで進めて返す。返す `reward`・`dt_ms` は、返した側の前の決定点からの合計。局が終わったら `done` と、両側の最後の決定点からの報酬と時間（`final_reward`、`final_dt_ms`、[N, 2]）を返し、次の局を始める。`read_actions` は機械の側の手書きの読みの手を返す（攻略役を手書きの読みに当てるため）。
 
+- （11/16 実装）`HumanBot` の `BotStyle::External`、`Features` の `buildHumanFeatures`・`buildHumanMask`・`humanMoveOfAction`、`EnvSlot::stepDuel`（刻みの途中の決定点から続ける `Resume`）、`hasami_env.DuelEnv`。機械だけの `BatchEnv` は今までと同じ局になる（`test_read_matches_simdriver_*` が通る）。両側ランダムの 6 局（種 1〜3）で、人間の決定点 924、機械の決定点 339、人間の手 879 のうち選んだマスに着いたもの 860。ネットなし・ランダムな手で 1 秒あたり約 28,700 決定点（機械 7,700、人間 21,000。クラウドの開発環境、256 環境）。BatchEnv の相手に `race3` を足した。wheel の SOURCE_HASH は 810d96c0a6a9941b。
+- （11/16 実装）`python/train/league.py`（2 つの PPO、人間の過去の版と PFSP、`--resume`、`--exploit`）。アドバンテージは決定点の列ごとに `ppo.gae` と同じ値になる（`test_league_buffer_advantage_matches_ppo_gae`）。
+
 ### 7.4 人間の実データ
 
 学習には使わない。Web のシミュレーター（GitHub Pages）は対局を保存しておらず（画面の記録は局ごとに消える表示だけ）、11/06 計画 3.12 の対局の記録はまだ作っていない。人の対局が 50 局以上集まらないと模倣の事前分布（B2、B3）は作れないので、この期間には入れない。

@@ -23,6 +23,15 @@ EnvConfig envConfig(EnvOpponent opponent, float speedScale, Level level) {
     case EnvOpponent::Random:
       c.bot.style = BotStyle::Random;
       break;
+    case EnvOpponent::Race3:
+      c.bot.style = BotStyle::Race3;
+      break;
+    case EnvOpponent::External:
+      // Race's hand (plan 2026-11-12 7.3): 400 ms after a placement lands, 500 ms +-40% to put
+      // a piece down, asked again 250 ms after "do nothing".
+      c.bot.style = BotStyle::External;
+      c.externalHuman = true;
+      break;
   }
   return c;
 }
@@ -37,10 +46,12 @@ EnvSlot::EnvSlot(const EnvConfig& cfg)
       seed_(0),
       stride_(1),
       truncated_(false),
+      resume_(Resume::NewTick),
+      side_(SIDE_MACHINE),
       snap_{},
       maskCount_(0),
-      decisionAt_(0),
-      reward_(0.0f),
+      decisionAt_{0, 0},
+      reward_{0.0f, 0.0f},
       lastDiff_(0) {
   std::memset(mask_, 0, sizeof(mask_));
 }
@@ -56,9 +67,11 @@ void EnvSlot::newGame(uint32_t seed) {
   activity_.reset();
   now_ = 0;
   truncated_ = false;
-  reward_ = 0.0f;
+  resume_ = Resume::NewTick;
+  side_ = SIDE_MACHINE;
+  reward_[0] = reward_[1] = 0.0f;
   lastDiff_ = 0;
-  decisionAt_ = 0;
+  decisionAt_[0] = decisionAt_[1] = 0;
   // SimDriver's constructor (resetMachine) and start().
   ctl_.update(now_);
   gantry_.magnet(MagnetMode::Off);
@@ -71,51 +84,91 @@ void EnvSlot::reset(uint32_t seed, uint32_t seedStride) {
   stride_ = seedStride;
   newGame(seed);
   while (!runToDecision()) newGame(seed_ + stride_);
-  decisionAt_ = now_;
+  decisionAt_[side_] = now_;
 }
 
-float EnvSlot::captureDelta() {
+void EnvSlot::accrueCaptures() {
   const int d = diff();
   const float r = cfg_.captureReward * static_cast<float>(d - lastDiff_);
   lastDiff_ = d;
-  return r;
+  reward_[SIDE_MACHINE] += r;
+  reward_[SIDE_HUMAN] -= r;
 }
+
+void EnvSlot::accrueEnd() {
+  accrueCaptures();
+  if (truncated_) return;
+  const Winner w = game_.winner();
+  if (w == Winner::Machine) {
+    reward_[SIDE_MACHINE] += cfg_.winReward;
+    reward_[SIDE_HUMAN] -= cfg_.winReward;
+  }
+  if (w == Winner::Human) {
+    reward_[SIDE_MACHINE] -= cfg_.winReward;
+    reward_[SIDE_HUMAN] += cfg_.winReward;
+  }
+}
+
+namespace {
+
+// The first action of a mask (ACTION_STAY when it is empty, which cannot normally happen).
+int onlyAction(const uint8_t mask[]) {
+  for (int a = 0; a < ACTION_COUNT; a++)
+    if (mask[a]) return a;
+  return ACTION_STAY;
+}
+
+}  // namespace
 
 bool EnvSlot::runToDecision() {
   for (;;) {
-    if (game_.phase() == Phase::Over) return false;
-    if (now_ >= cfg_.maxSimMs) {
-      truncated_ = true;
-      return false;
-    }
-    // SimDriver::advance, with the read replaced by the decision point.
-    now_ += cfg_.tickMs;
-    const uint32_t clockBefore = game_.clockMs();
-    const int diffBefore = diff();
-    game_.tick(now_);
-    // The game clock advances only here (in Play), before anything in the tick can capture.
-    if (diffBefore == 0)
-      reward_ -= cfg_.drawPenaltyPerSec * static_cast<float>(game_.clockMs() - clockBefore) / 1000.0f;
-    ctl_.update(now_);
-    gantry_.update(now_);
-    if (game_.phase() == Phase::Paused && game_.stuckId() >= 0) game_.onManualRemoval(game_.stuckId());
-    if (ctl_.wantsThink(now_)) {
-      snap_ = ctl_.takeSnapshot(now_);
-      maskCount_ = buildMask(game_, mask_);
-      if (maskCount_ >= 2) {
-        reward_ += captureDelta();
-        return true;
+    if (resume_ == Resume::NewTick) {
+      if (game_.phase() == Phase::Over) return false;
+      if (now_ >= cfg_.maxSimMs) {
+        truncated_ = true;
+        return false;
       }
-      // A single choice (or none, which cannot normally happen) is taken without asking.
-      int only = ACTION_STAY;
-      for (int a = 0; a < ACTION_COUNT; a++)
-        if (mask_[a]) {
-          only = a;
-          break;
+      // SimDriver::advance, with the read replaced by the decision point.
+      now_ += cfg_.tickMs;
+      const uint32_t clockBefore = game_.clockMs();
+      const int diffBefore = diff();
+      game_.tick(now_);
+      // The game clock advances only here (in Play), before anything in the tick can capture.
+      if (diffBefore == 0)
+        reward_[SIDE_MACHINE] -=
+            cfg_.drawPenaltyPerSec * static_cast<float>(game_.clockMs() - clockBefore) / 1000.0f;
+      ctl_.update(now_);
+      gantry_.update(now_);
+      if (game_.phase() == Phase::Paused && game_.stuckId() >= 0) game_.onManualRemoval(game_.stuckId());
+      resume_ = Resume::AfterRead;
+      if (ctl_.wantsThink(now_)) {
+        snap_ = ctl_.takeSnapshot(now_);
+        maskCount_ = buildMask(game_, mask_);
+        if (maskCount_ >= 2) {
+          side_ = SIDE_MACHINE;
+          accrueCaptures();
+          return true;
         }
-      applyRead(only);
+        // A single choice is taken without asking.
+        applyRead(onlyAction(mask_));
+      }
     }
-    tailOfTick();
+    if (resume_ == Resume::AfterRead) {
+      botAct();
+      resume_ = Resume::AfterBot;
+      if (cfg_.externalHuman && bot_.awaitingExternal()) {
+        maskCount_ = buildHumanMask(game_, mask_);
+        if (maskCount_ >= 2) {
+          side_ = SIDE_HUMAN;
+          accrueCaptures();
+          return true;
+        }
+        applyHuman(onlyAction(mask_));
+      }
+    }
+    // The rest of the tick.
+    if (cfg_.trackActivity) activity_.observe(game_, gantry_.headR(), gantry_.headC(), cfg_.params);
+    resume_ = Resume::NewTick;
   }
 }
 
@@ -130,8 +183,12 @@ void EnvSlot::applyRead(int action) {
   }
 }
 
-void EnvSlot::tailOfTick() {
-  // SimDriver::runBot, lift and place.
+void EnvSlot::applyHuman(int action) {
+  bot_.setExternal(humanMoveOfAction(game_, action));
+  botAct();  // lifts now (or arms the wait)
+}
+
+void EnvSlot::botAct() {
   const BotAction a = bot_.decide(game_, gantry_.headR(), gantry_.headC(), now_);
   if (a.kind == BotAction::Lift) {
     const LiftResult res = game_.onHumanLift(a.r, a.c, now_);
@@ -141,31 +198,24 @@ void EnvSlot::tailOfTick() {
     const PlaceResult res = game_.onHumanPlace(a.r, a.c, now_);
     bot_.onPlaced(game_, res);
   }
-  if (cfg_.trackActivity) activity_.observe(game_, gantry_.headR(), gantry_.headC(), cfg_.params);
 }
 
 EnvStep EnvSlot::step(int action) {
   EnvStep out{};
   applyRead(action);
-  tailOfTick();
   if (runToDecision()) {
-    out.reward = reward_;
-    out.dtMs = now_ - decisionAt_;
+    out.reward = reward_[SIDE_MACHINE];
+    out.dtMs = now_ - decisionAt_[SIDE_MACHINE];
     out.done = false;
     out.info = info();
-    reward_ = 0.0f;
-    decisionAt_ = now_;
+    reward_[SIDE_MACHINE] = 0.0f;
+    decisionAt_[SIDE_MACHINE] = now_;
     return out;
   }
   // The game is over (or cut off).
-  reward_ += captureDelta();
-  if (!truncated_) {
-    const Winner w = game_.winner();
-    if (w == Winner::Machine) reward_ += cfg_.winReward;
-    if (w == Winner::Human) reward_ -= cfg_.winReward;
-  }
-  out.reward = reward_;
-  out.dtMs = now_ - decisionAt_;
+  accrueEnd();
+  out.reward = reward_[SIDE_MACHINE];
+  out.dtMs = now_ - decisionAt_[SIDE_MACHINE];
   out.done = true;
   out.info = info();
   // The next game, up to its first decision point. Reward accrued there before that point (none
@@ -173,15 +223,53 @@ EnvStep EnvSlot::step(int action) {
   do {
     newGame(seed_ + stride_);
   } while (!runToDecision());
-  decisionAt_ = now_;
+  decisionAt_[SIDE_MACHINE] = now_;
+  return out;
+}
+
+DuelStep EnvSlot::stepDuel(int action) {
+  DuelStep out{};
+  if (side_ == SIDE_HUMAN)
+    applyHuman(action);
+  else
+    applyRead(action);
+  if (runToDecision()) {
+    out.side = side_;
+    out.reward = reward_[side_];
+    out.dtMs = now_ - decisionAt_[side_];
+    out.done = false;
+    out.info = info();
+    reward_[side_] = 0.0f;
+    decisionAt_[side_] = now_;
+    return out;
+  }
+  accrueEnd();
+  out.done = true;
+  for (int k = 0; k < 2; k++) {
+    out.finalReward[k] = reward_[k];
+    out.finalDtMs[k] = now_ - decisionAt_[k];
+  }
+  out.info = info();
+  do {
+    newGame(seed_ + stride_);
+  } while (!runToDecision());
+  out.side = side_;
+  out.reward = 0.0f;
+  out.dtMs = 0;
+  reward_[side_] = 0.0f;
+  decisionAt_[side_] = now_;
   return out;
 }
 
 void EnvSlot::features(int16_t planes[], int16_t scal[]) const {
-  buildFeatures(game_, gantry_.headR(), gantry_.headC(), cfg_.speedScale100, planes, scal);
+  if (side_ == SIDE_HUMAN)
+    buildHumanFeatures(game_, gantry_.headR(), gantry_.headC(), ctl_.job(), cfg_.speedScale100, planes, scal);
+  else
+    buildFeatures(game_, gantry_.headR(), gantry_.headC(), cfg_.speedScale100, planes, scal);
 }
 
 int EnvSlot::readAction(Level level) const {
+  if (side_ != SIDE_MACHINE) return ACTION_STAY;
   Params p = cfg_.params;
   p.level = level;
   return actionOfAiMove(game_, think(snap_, p));
@@ -211,6 +299,14 @@ void BatchEnv::resetRange(int begin, int end) {
 
 void BatchEnv::stepRange(int begin, int end, const int32_t actions[], EnvStep out[]) {
   for (int i = begin; i < end; i++) out[i] = slots_[i]->step(actions[i]);
+}
+
+void BatchEnv::stepDuelRange(int begin, int end, const int32_t actions[], DuelStep out[]) {
+  for (int i = begin; i < end; i++) out[i] = slots_[i]->stepDuel(actions[i]);
+}
+
+void BatchEnv::sideRange(int begin, int end, int8_t out[]) const {
+  for (int i = begin; i < end; i++) out[i] = static_cast<int8_t>(slots_[i]->side());
 }
 
 void BatchEnv::readRange(int begin, int end, Level level, int32_t out[]) const {

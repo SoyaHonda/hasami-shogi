@@ -2,6 +2,8 @@
 #include <cstdint>
 #include "Ai.h"
 #include "Game.h"
+#include "HumanBot.h"
+#include "MachineController.h"
 
 // The learning environment's view of the game for the machine (plan 2026-11-12 section 4): the
 // observation planes, the scalars, the action numbering and the legal-action mask. Built from the
@@ -61,3 +63,24 @@ int buildMask(const Game& g, uint8_t mask[]);
 // The move an action asks for (AiMove::none for ACTION_STAY), and the action of a move.
 AiMove moveOfAction(const Game& g, int action);
 int actionOfAiMove(const Game& g, const AiMove& m);
+
+// The human side's view (plan 2026-11-12 7.3), for a human played from outside (DuelEnv). Same
+// shapes and units as the machine's, the board as it stands. The human decides only with no piece
+// in hand and no placement pending, so the machine's job takes the planes of the held piece:
+//   0  human pieces on the board (1)          1  machine pieces on the board (1)
+//   2  square of the piece the machine is moving (1; not while removing captured pieces)
+//   3  square the machine has reserved (1)    4  human placement interval left (every square)
+//   5  machine piece cooldown left            6  human piece cooldown left
+//   7  machine piece time until RU            8  human piece time until RU
+//   9  head position (1)                      10 destination of the machine's move job (1)
+//   11 pieces in an edge group with one empty neighbour left (RE; 1)
+// Scalars: human captures, machine captures, game time left, Opening (0/1), the machine has made
+// its opening move (0/1; 1 without RW), speed_scale x 100.
+void buildHumanFeatures(const Game& g, float headR, float headC, const JobView& job, int speedScale100,
+                        int16_t planes[], int16_t scal[]);
+// The human's actions now: a human piece on the board, cooled down, to a destination of dests() on
+// Game::boardWithReserve that makes no wall under RW (HumanBot's legal destinations). "Do nothing"
+// is legal except in Opening before the human's opening move. Returns the count.
+int buildHumanMask(const Game& g, uint8_t mask[]);
+// The human move an action asks for (BotMove::Wait for ACTION_STAY or no such piece).
+BotMove humanMoveOfAction(const Game& g, int action);

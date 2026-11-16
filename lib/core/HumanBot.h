@@ -8,7 +8,10 @@
 //   Trap:   regression bot that sets traps A, B and C (plan 2026-10-31 section 1).
 //   Race:   reads the race of RaceTime from the human side (the main opponent for measuring).
 //   Race3:  Race plus a search for captures that take two or three placements.
-enum class BotStyle { Random, Trap, Race, Race3 };
+//   External: the moves come from outside (the learning environment's human side, plan
+//           2026-11-12 7.3): when it is time to lift, the bot asks (awaitingExternal) and waits for
+//           setExternal; the lift, the hand time and the human rules stay the bot's.
+enum class BotStyle { Random, Trap, Race, Race3, External };
 
 struct BotParams {
   // Wait after a placement lands before lifting the next piece.
@@ -28,6 +31,8 @@ struct BotParams {
   // for them (the other styles' games stay as they were).
   uint32_t thinkMaxMs = 0;
   float threatMiss = 0.0f;
+  // External: the wait after the outside chose "do nothing" before it is asked again.
+  uint32_t externalWaitMs = 250;
 };
 
 // Seeded random numbers (xorshift32): the same sequence on every build.
@@ -114,6 +119,19 @@ class HumanBot {
   // The race after the human piece `id` is put on (toR,toC) now (Race's evaluation).
   BotRaceEval raceAfter(const Game& game, float headR, float headC, int id, int toR, int toC) const;
 
+  // External style. awaitingExternal(): decide() reached the moment to lift and asks for a move;
+  // it returns no action until setExternal() gives one (a BotMove::Move of a human piece that can
+  // be lifted now, with a legal destination, or BotMove::Wait for "do nothing"). The next decide()
+  // at the same time then lifts that piece, or waits externalWaitMs before asking again. The piece
+  // is put down on the chosen square after the hand time; if that square is no longer legal, it
+  // goes back to its origin (or, with the origin filled, the escape rule).
+  bool awaitingExternal() const { return extAwaiting_; }
+  void setExternal(const BotMove& m) {
+    extMove_ = m;
+    extHas_ = true;
+    extAwaiting_ = false;
+  }
+
  private:
   BotMove chooseTrap(const Game& game);
   BotMove chooseRace(const Game& game, float headR, float headC, bool search);
@@ -143,4 +161,8 @@ class HumanBot {
   uint32_t now_;
   bool openArmed_;
   uint32_t openNextAt_;
+  // External: asking for a move, and the move given.
+  bool extAwaiting_;
+  bool extHas_;
+  BotMove extMove_;
 };
