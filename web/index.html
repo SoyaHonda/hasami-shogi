@@ -160,6 +160,21 @@
         <button class="btn" id="recDownload" disabled>ダウンロード（.jsonl）</button>
         <button class="btn ghost" id="recClear">すべて消す</button>
       </div>
+      <details class="gh">
+        <summary>GitHub に自動で送る</summary>
+        <div class="ghform">
+          <label for="ghRepo">リポジトリ</label><input id="ghRepo" type="text" placeholder="SoyaHonda/hasami-games" autocomplete="off" spellcheck="false">
+          <label for="ghBranch">ブランチ</label><input id="ghBranch" type="text" value="main" autocomplete="off" spellcheck="false">
+          <label for="ghDir">フォルダー</label><input id="ghDir" type="text" value="games" autocomplete="off" spellcheck="false">
+          <label for="ghToken">トークン</label><input id="ghToken" type="password" placeholder="github_pat_..." autocomplete="off" spellcheck="false">
+        </div>
+        <div class="btns">
+          <button class="btn" id="ghSave">保存して送る</button>
+          <button class="btn ghost" id="ghForget">送るのをやめる（トークンを消す）</button>
+        </div>
+        <p class="note" id="ghStatus"></p>
+        <p class="note">対局が終わるたびに、1 局を 1 つのファイル（フォルダー/日付/時刻-id.json）としてリポジトリにコミットします。送れなかった局は、次にこのページを開いたときに送り直します。トークンはこのブラウザーの中にだけ保存されます。GitHub の Settings → Developer settings → Fine-grained tokens で、送り先のリポジトリだけを選び、Contents を Read and write にしたトークンを作ってください。コードのリポジトリとは別の、棋譜だけのリポジトリを送り先にすると、トークンが漏れてもコードは書き換えられません。</p>
+      </details>
       <p class="note">駒を一度でも動かした対局は、終わったとき（途中で新しい対局を始めたときも）にこのブラウザーの中に保存されます。外のサーバーには送りません（手元で <code>npm run serve</code> から開いたときだけ、手元の <code>logs/</code> にも書きます）。名前などの個人の情報は入りません。入るのは、ルールと設定、駒を持ち上げて置いた時刻とマス、対局を再現するための時間の刻みです。学習に使うときは、ダウンロードしたファイルをリポジトリの <code>data/games/</code> に置いてください。</p>
     </section>
 

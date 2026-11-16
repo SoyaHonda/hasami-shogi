@@ -1,7 +1,7 @@
 // Screen of the simulator (ported from sim/hasami-sim.html). All game logic lives in the WASM
 // SimDriver (lib/core); this file only draws state() and forwards clicks and settings.
 import createModule from './hasami.js';
-import { Recorder, RecordStore } from './record.js';
+import { Recorder, RecordStore, uploadRecord } from './record.js';
 
 const m = await createModule();
 const { Phase, Winner, Level, PlaceResult, EventKind } = m;
@@ -203,7 +203,10 @@ function endRecord(end) {
   rec = null;
   if (!r.touched) return;
   const done = r.finish(end, sim.state());
-  store.add(done).then(showRecordCount);
+  store.add(done).then(() => {
+    showRecordCount();
+    syncUploads();
+  });
   if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
     fetch('/api/games', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(done) }).catch(() => {});
   }
@@ -621,6 +624,89 @@ async function showRecordCount() {
   $('recCount').textContent = String(all.length);
   $('recDownload').disabled = all.length === 0;
 }
+
+// Sending records to GitHub (record.js uploadRecord): the settings and the token stay in this
+// browser (localStorage); records not sent yet go out after each game and when the page opens.
+const GH_KEY = 'hasami-github';
+function ghLoad() {
+  try {
+    return JSON.parse(localStorage.getItem(GH_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
+function ghSaveCfg(cfg) {
+  try {
+    if (cfg) localStorage.setItem(GH_KEY, JSON.stringify(cfg));
+    else localStorage.removeItem(GH_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+let ghCfg = ghLoad();
+let syncing = false, ghError = '';
+async function showUploadStatus() {
+  const el = $('ghStatus');
+  if (!ghCfg) {
+    el.textContent = 'オフ（送るには、上のリポジトリとトークンを入れて「保存して送る」を押します）';
+    return;
+  }
+  const all = await store.all();
+  const sent = await store.sentIds();
+  const left = all.filter((r) => !sent.has(r.id)).length;
+  el.textContent = `オン（${ghCfg.repo}）：送信済み ${all.length - left} 局、未送信 ${left} 局${ghError ? `。${ghError}` : ''}`;
+}
+async function syncUploads() {
+  if (!ghCfg || syncing) return showUploadStatus();
+  syncing = true;
+  ghError = '';
+  try {
+    const all = await store.all();
+    const sent = await store.sentIds();
+    for (const r of all) {
+      if (sent.has(r.id)) continue;
+      const res = await uploadRecord(r, ghCfg);
+      if (!res.ok) {
+        ghError = res.message;
+        break;
+      }
+      await store.markSent(r.id);
+    }
+  } finally {
+    syncing = false;
+  }
+  showUploadStatus();
+}
+function showGhForm() {
+  $('ghRepo').value = ghCfg ? ghCfg.repo : '';
+  $('ghBranch').value = ghCfg ? ghCfg.branch : 'main';
+  $('ghDir').value = ghCfg ? ghCfg.dir : 'games';
+  $('ghToken').value = '';
+  $('ghToken').placeholder = ghCfg ? '保存済み（変えるときだけ入れる）' : 'github_pat_...';
+  $('ghForget').disabled = !ghCfg;
+}
+$('ghSave').onclick = () => {
+  const token = $('ghToken').value.trim() || (ghCfg && ghCfg.token) || '';
+  const cfg = { repo: $('ghRepo').value.trim(), branch: $('ghBranch').value.trim() || 'main', dir: $('ghDir').value.trim(), token };
+  if (!/^[\w.-]+\/[\w.-]+$/.test(cfg.repo) || !cfg.token) {
+    $('ghStatus').textContent = 'リポジトリ（owner/name）とトークンを入れてください';
+    return;
+  }
+  ghCfg = cfg;
+  if (!ghSaveCfg(cfg)) ghError = 'このブラウザーでは設定を保存できません（このページを閉じるまで有効）';
+  showGhForm();
+  syncUploads();
+};
+$('ghForget').onclick = () => {
+  ghCfg = null;
+  ghError = '';
+  ghSaveCfg(null);
+  showGhForm();
+  showUploadStatus();
+};
+showGhForm();
+syncUploads();
 $('recDownload').onclick = async () => {
   const all = await store.all();
   if (!all.length) return;

@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadHasami } from '../load-wasm.mjs';
-import { DT_CHARS, FORMAT, Recorder, enumName, replay, resultOf } from '../../web/record.js';
+import { DT_CHARS, FORMAT, Recorder, enumName, recordPath, replay, resultOf, uploadRecord } from '../../web/record.js';
 
 let m;
 before(async () => {
@@ -167,4 +167,37 @@ test('tools/replay.mjs checks records and writes the moves', () => {
   const ng = spawnSync(process.execPath, [tool, games], { encoding: 'utf8' });
   assert.equal(ng.status, 1);
   assert.match(ng.stdout, /does not replay/);
+});
+
+test('uploadRecord puts one file per game with the token, and says what went wrong', async () => {
+  const rec = { format: 1, id: 'ab12', date: '2026-11-16T06:20:23.123Z', ops: ['AB'], result: {} };
+  assert.equal(recordPath(rec, 'games'), 'games/2026-11-16/2026-11-16T06-20-23-123Z-ab12.json');
+  assert.equal(recordPath(rec, '/data/games/'), 'data/games/2026-11-16/2026-11-16T06-20-23-123Z-ab12.json');
+  const calls = [];
+  const reply = (status, body = {}) => async (url, init) => {
+    calls.push({ url, init });
+    return { status, json: async () => body };
+  };
+  const cfg = { repo: 'me/hasami-games', token: 'tok', branch: 'main', dir: 'games' };
+  const ok = await uploadRecord(rec, cfg, reply(201));
+  assert.equal(ok.ok, true);
+  const { url, init } = calls[0];
+  assert.equal(url, 'https://api.github.com/repos/me/hasami-games/contents/games/2026-11-16/2026-11-16T06-20-23-123Z-ab12.json');
+  assert.equal(init.method, 'PUT');
+  assert.equal(init.headers.Authorization, 'Bearer tok');
+  const body = JSON.parse(init.body);
+  assert.match(body.message, /\[skip ci\]/);
+  assert.equal(body.branch, 'main');
+  assert.deepEqual(JSON.parse(Buffer.from(body.content, 'base64').toString('utf8')), rec);
+  // Already there: sent before.
+  assert.equal((await uploadRecord(rec, cfg, reply(422, { message: '"sha" wasn\'t supplied.' }))).ok, true);
+  const bad = await uploadRecord(rec, cfg, reply(401, { message: 'Bad credentials' }));
+  assert.equal(bad.ok, false);
+  assert.match(bad.message, /トークン/);
+  assert.equal((await uploadRecord(rec, { ...cfg, repo: 'no slash' }, reply(201))).ok, false);
+  const down = await uploadRecord(rec, cfg, async () => {
+    throw new Error('offline');
+  });
+  assert.equal(down.ok, false);
+  assert.match(down.message, /offline/);
 });

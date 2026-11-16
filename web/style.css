@@ -124,6 +124,12 @@ section.box{background:var(--panel);border:1px solid var(--line);border-radius:1
 .note{margin:0;font-size:12.5px;color:var(--muted);line-height:1.6}
 .note b{font-family:var(--font-num);color:var(--ink);font-variant-numeric:tabular-nums}
 .btn:disabled{opacity:.45;cursor:default}
+details.gh{display:grid;gap:10px}
+details.gh summary{cursor:pointer;font-size:13px;font-weight:700}
+details.gh[open]{display:grid;gap:10px}
+details.gh > * + *{margin-top:10px}
+.ghform{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px;align-items:center;font-size:13px}
+.ghform input{font:inherit;font-size:13px;padding:4px 7px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);min-width:0}
 button{font:inherit;cursor:pointer}
 .btn{background:var(--btn);color:var(--btn-ink);border:0;border-radius:7px;padding:8px 14px;font-weight:700}
 .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
