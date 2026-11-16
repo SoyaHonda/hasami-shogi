@@ -235,14 +235,14 @@ scal の 6 つは、機械が取った枚数、人間が取った枚数、残り
 本田がプログラムを直したら、次の 2 つで取り込みます。この章を始めるときと、本田から更新を知らせたときに打ってください。
 
 ```bash
-cd ~/hasami-shogi && source ~/venv/bin/activate && git pull origin main
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull --no-edit origin main
 ```
 
 ```bash
 python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0-cp312-cp312-linux_x86_64.whl
 ```
 
-1 つ目は main の更新を取り込みます。`origin main` を省いた `git pull` は、今いるブランチの更新しか取ってきません。Git の節で自分のブランチを作ったあとは、`git pull` だけでは main の更新が来ず、Already up to date と出てしまいます。2 つ目は wheel の入れ直しです。本田が C++ を変えると wheel も作り直されますが、pip で入れたものは git pull では入れ替わりません。変わっていないときに打っても害はないので、毎回打ってください。
+1 つ目は main の更新を取り込みます。`origin main` を省いた `git pull` は、今いるブランチの更新しか取ってきません。自分のブランチにいるときは、`git pull` だけでは main の更新が来ず、Already up to date と出てしまいます。`--no-edit` は、手元に結果のコミットがあるときに取り込みのメッセージを書く画面が開かないようにするためのものです。2 つ目は wheel の入れ直しです。本田が C++ を変えると wheel も作り直されますが、pip で入れたものは git pull では入れ替わりません。変わっていないときに打っても害はないので、毎回打ってください。
 
 ### 4-2 テストで確かめる
 
@@ -455,7 +455,7 @@ python python/train/evaluate.py --model runs/b1_s13/model.pt --speed-scale 1.3 -
 
 ### 6-5 対局を録画する
 
-学習した AI の 1 局を GIF にします。赤が機械の駒、青が人間の駒、点線が持ち上げ中の駒、× が機械のヘッドです。決定点ごとの盤なので動きは飛び飛びで、最後に駒を取った瞬間の盤は入りません。`--``seed` を変えると別の局になります。
+学習した AI の 1 局を GIF にします。赤が機械の駒、青が人間の駒、点線が持ち上げ中の駒、× が機械のヘッドです。決定点ごとの盤なので動きは飛び飛びで、最後に駒を取った瞬間の盤は入りません。`--seed` を変えると別の局になります。
 
 ```bash
 python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 --out runs/game.gif
@@ -478,7 +478,7 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 4-1 の 2 つのコマンドで最新を取り込み、テストを回します。
 
 ```bash
-cd ~/hasami-shogi && source ~/venv/bin/activate && git pull origin main
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull --no-edit origin main
 ```
 
 ```bash
@@ -489,7 +489,7 @@ python -m pip install --force-reinstall --no-deps python/wheels/hasami_env-0.1.0
 
 ### 7-3 速さ 1.0 の学習の結果を push する
 
-VM は 11 月末に回収されるので、終わった学習の結果は先に push しておきます（Git の節。`runs/b1_s10` の `log.csv` と `model.pt`）。評価はここではしなくて構いません。リーグは `runs/b1_s10/model.pt` を読み込むだけで上書きしないので、評価はリーグのあとでまとめてできます（7-7）。
+VM は 11 月末に回収されるので、終わった学習の結果は先に push しておきます（Git の節。`bash tools/push_results.sh runs/b1_s10`）。評価はここではしなくて構いません。リーグは `runs/b1_s10/model.pt` を読み込むだけで上書きしないので、評価はリーグのあとでまとめてできます（7-7）。
 
 ### 7-4 リーグを始める
 
@@ -527,7 +527,7 @@ tail -n 3 runs/league_s10/log.csv
 
 ### 7-6 終わったら push する
 
-リーグの結果は、ほかの学習とは別の `runs/league_s10` に保存されています（`log.csv` は毎回の更新、`machine.pt`・`human.pt`・`checkpoint.pt` は 50 回ごとと最後、`pool/` に人間の過去の版）。終わったら、まず push します（Git の節。`runs/league_s10` の `log.csv`、`machine.pt`、`human.pt`）。分析はこのあと、11/24 までのいつでも構いません。
+リーグの結果は、ほかの学習とは別の `runs/league_s10` に保存されています（`log.csv` は毎回の更新、`machine.pt`・`human.pt`・`checkpoint.pt` は 50 回ごとと最後、`pool/` に人間の過去の版）。終わったら、まず push します（Git の節。`bash tools/push_results.sh runs/league_s10`）。分析はこのあと、11/24 までのいつでも構いません。
 
 ### 7-7 評価と攻略役（あとでまとめて）
 
@@ -568,9 +568,9 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 | `No module named 'hasami_env'` か `No module named 'hasami_env._core'` | Python 環境が有効でない、wheel を入れていない、`python` フォルダーの中で実行した | `~/hasami-shogi` で実行する。1-3 をやり直す。`PYTHONPATH` に `python/` を入れない |
 | `No module named 'model'` | `model.py` が `python/train/` にない | 4-1 の git pull をやり直す。`python python/train/ppo.py` の形で実行する |
 | テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | 4-1 の 2 つのコマンドを打ち直す |
-| `git pull` しても Already up to date で、本田が直したはずのファイルが来ない | 今いるブランチが main ではない（`git status -sb` の 1 行目でわかる） | `git pull origin main` で main の更新を取り込む（4-1） |
+| `git pull` しても Already up to date で、本田が直したはずのファイルが来ない | 今いるブランチが main ではない（`git status -sb` の 1 行目でわかる） | `git pull --no-edit origin main` で main の更新を取り込む（4-1） |
 | テストの数が 22 より少ない | 古いプログラムのまま | 4-1 の 2 つのコマンドを打つ |
-| `git pull origin main` で `CONFLICT` と出る | 自分で直したファイルと、本田が直したファイルがぶつかった | `git merge --abort` で取り込む前に戻す。自分で直したファイルを別の名前で写しておき、`git checkout -- ファイル名` で元に戻してから、4-1 をやり直す |
+| `git pull --no-edit origin main` で `CONFLICT` と出る | 自分で直したファイルと、本田が直したファイルがぶつかった | `git merge --abort` で取り込む前に戻す。自分で直したファイルを別の名前で写しておき、`git checkout -- ファイル名` で元に戻してから、4-1 をやり直す |
 | `No module named 'league'` か、リーグのテストがない | リーグを足す前のプログラムのまま | 4-1 の 2 つのコマンドを打つ |
 | `ValueError: action ... is not in its mask` | 選べない手を渡した | `model.py` の `masked_fill(~mask, -1e9)` を消していないか、別の step の mask を使っていないか確かめる |
 | `steps_per_s` が 1,000 より小さい | ほかの学習と CPU を取り合っている | 同じ VM で 2 本回すときは両方 `--threads 2` にする。`top` で動いているものを見る |
@@ -578,8 +578,8 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 | `torch.cuda.is_available()` が False | Python 環境が有効でない | `source ~/venv/bin/activate`。それでも False なら `nvidia-smi` の出力を TA に送る |
 | SSH が切れた | ネットワーク | tmux の中なら学習は続いている。つなぎ直して `tmux attach -t train` |
 | 学習が途中で止まった（VM を止めたなど） | VM を止めると tmux の中も止まる | `--out` を同じにして `--resume` を付けると、50 回ごとに保存した `checkpoint.pt` から続く（5-1）。50 回目より前に止まったときは最初からやり直す |
+| push で `Authentication failed` か 403 と出る | トークンが違うか、期限が切れている | 新しいトークンで Git の節の設定をやり直す |
 | `No space left on device` | ディスクがいっぱい | `df -h` と `du -sh runs/*` で確かめ、要らない `runs` の中身を消す |
-
 
 ## 決まりごと
 
@@ -601,31 +601,25 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 
 ### Git
 
-作ったファイルと学習の結果は、自分のブランチに push します。main には直接 push しません。push できなければ、本田に GitHub の collaborator に招待してもらってください。
+学習の結果は、`tools/push_results.sh` で push します。VM ごとに `results/VM の名前`（`results/aiexp-03` など）というブランチに入るので、2 台がぶつかることはなく、main も書き換えません。
 
-最初に 1 回だけ、名前とメールアドレスを登録し、自分のブランチを作ります。
+最初に 1 回だけ、共有のトークンで push 先を設定します（`TOKEN` のところをトークンに置き換えます）。
 
 ```bash
-git config --global user.name "名前" && git config --global user.email "メールアドレス"
+cd ~/hasami-shogi && git remote set-url origin https://token:TOKEN@github.com/SoyaHonda/hasami-shogi.git
+```
+
+結果を push するときは、学習のフォルダーを並べて打ちます。
+
+```bash
+bash tools/push_results.sh runs/b1_s10
 ```
 
 ```bash
-git checkout -b train/自分の名前
+bash tools/push_results.sh runs/league_s10
 ```
 
-結果を保存するときは、次のようにします（`runs/b1_s10` はそのときの学習のフォルダーに書き換えます）。
-
-```bash
-git add python/train runs/b1_s10/log.csv runs/b1_s10/model.pt && git commit -m "train: B1, speed 1.0" && git push -u origin train/自分の名前
-```
-
-リーグの結果は次のようにします。
-
-```bash
-git add runs/league_s10/log.csv runs/league_s10/machine.pt runs/league_s10/human.pt && git commit -m "league: speed 1.0" && git push -u origin train/自分の名前
-```
-
-VM から push するには GitHub のトークンが要ります。難しければ、scp で自分のパソコンに取ってきてから、パソコンで push してください。
+それぞれのフォルダーの `log.csv`、`model.pt`、`machine.pt`、`human.pt` のうちあるものをコミットして push し、最後に `pushed to results/...` と出ます。`checkpoint.pt` と `pool/` は続きから学習するためのものなので push しません。攻略役のフォルダー（`runs/exploit_read` など）も同じように push できます。自分で直したプログラムも一緒に入れたいときは、先に `git add python/train/直したファイル` を打ってから同じコマンドを打ちます。
 
 ### VM
 
