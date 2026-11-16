@@ -18,10 +18,26 @@ of read_actions), capture_reward (0.2 per piece of capture difference), n_thread
 CPU), track_activity (True), tick_ms (10). env.read_actions(level=None) returns the actions the
 hand-written read (Ai think) picks at the current decision points.
 
+opponent "race3" is Race plus a search for captures of two or three placements.
+
+    duel = hasami_env.DuelEnv(n_envs=256, seed=1, speed_scale=1.0)  # both sides from Python
+    obs, scal, mask, side = duel.reset()
+    obs, scal, mask, side, reward, dt_ms, done, info = duel.step(actions)
+
+DuelEnv (plan 2026-11-12 7.3): side int8 [N] is the side to act in each game (0 machine, 1 human);
+obs, scal and mask are that side's view (lib/core/Features.h: buildFeatures, buildHumanFeatures),
+and actions[i] is taken for that side. reward and dt_ms are the returned side's since its previous
+decision point (ignore them at its first one in a game). When done, info["final_reward"] and
+info["final_dt_ms"] ([N, 2], machine then human) give both sides' reward and time from their last
+decision points to the end. The human lifts the chosen piece at once and puts it down
+human_move_ms (500) +-40% later; it is asked again human_react_ms (400) after its placement lands,
+or human_wait_ms (250) after "do nothing". read_actions() gives the hand-written read's moves at the
+machine's decision points (STAY elsewhere).
+
 The planes, scalars and actions are documented in lib/core/Features.h. SOURCE_HASH is the hash of
 the C++ sources the module was built from (hasami_env/srchash.py).
 """
 
-from ._core import BOARD, N_ACTIONS, N_CHANNELS, N_SCALARS, SOURCE_HASH, STAY, BatchEnv
+from ._core import BOARD, N_ACTIONS, N_CHANNELS, N_SCALARS, SOURCE_HASH, STAY, BatchEnv, DuelEnv
 
-__all__ = ["BatchEnv", "BOARD", "N_ACTIONS", "N_CHANNELS", "N_SCALARS", "SOURCE_HASH", "STAY"]
+__all__ = ["BatchEnv", "DuelEnv", "BOARD", "N_ACTIONS", "N_CHANNELS", "N_SCALARS", "SOURCE_HASH", "STAY"]

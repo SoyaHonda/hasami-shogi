@@ -41,6 +41,24 @@ obs, scal, mask, reward, dt_ms, done, info = env.step(actions)
 
 `model.py`（ネットワーク）、`ppo.py`（PPO の学習）、`evaluate.py`（今の読みとの比較、200 局）、`plot_curve.py`（学習曲線）、`record_game.py`（1 局の GIF）。PyTorch が要るので、演習の VM で使う。`python/tests/test_train.py` は PyTorch があるときだけ動き（ないときはスキップ）、小さな設定で学習・評価・曲線・録画を一通り回す。`try_random.py` は環境を試すためのランダムな機械（マニュアルの第2章）。手順は学習担当マニュアル（`docs/training-manual.md`）にある。
 
+## リーグ（python/train/league.py）
+
+計画 2026-11-12 の 7.2〜7.3。人間側も Python から指せる `hasami_env.DuelEnv` を使い、機械の主役と人間の主役を同時に PPO で学習する。機械は B1 相手の BatchEnv と DuelEnv の両方で指し、DuelEnv の人間は半分が人間の主役、残りが人間の過去の版（PFSP で選ぶ）。`--exploit` は、止めた機械（`machine.pt` や `model.pt`、または `read` で手書きの読み）だけを狙う人間を学習する。
+
+```bash
+python python/train/league.py --init-machine runs/b1_s10/model.pt --out runs/league
+```
+
+```bash
+python python/train/league.py --out runs/league --resume
+```
+
+```bash
+python python/train/league.py --exploit read --out runs/exploit_read
+```
+
+50 回の更新ごとと最後に `machine.pt`（`evaluate.py --model` で読める）、`human.pt`、`checkpoint.pt`、`pool/human_XXXXX.pt` を保存し、`log.csv` に更新ごとの成績（B1 への勝率、人間の主役への勝率と枚数、過去の版への勝率）を書く。`--exploit` のときの main の列は、攻略役を相手にした機械の成績。
+
 ## 速さ
 
 ```bash

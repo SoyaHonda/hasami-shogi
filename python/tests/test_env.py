@@ -205,3 +205,86 @@ def test_capture_reward_scales_rewards():
     # The same games: the reward does not change the play.
     for x, y in zip(a[1:], b[1:]):
         np.testing.assert_array_equal(x[0], y[0])
+
+
+# ---- DuelEnv: both sides from Python (plan 2026-11-12 7.3).
+
+
+def random_legal(mask, rng):
+    """One legal action per row of mask, uniformly."""
+    return np.where(mask, rng.gumbel(size=mask.shape), -np.inf).argmax(axis=1).astype(np.int32)
+
+
+def test_race3_opponent():
+    env = BatchEnv(n_envs=4, seed=1, opponent="race3", n_threads=2)
+    obs, scal, mask = env.reset()
+    for _ in range(30):
+        obs, scal, mask, *_ = env.step(env.read_actions())
+    assert env.opponent == "race3"
+
+
+def test_duel_shapes_sides_and_finished_games():
+    duel = hasami_env.DuelEnv(n_envs=8, seed=3, n_threads=2)
+    obs, scal, mask, side = duel.reset()
+    assert obs.shape == (8, 12, 7, 7) and scal.shape == (8, 6) and mask.shape == (8, 1177)
+    assert side.dtype == np.int8 and set(np.unique(side)) <= {0, 1}
+    assert (duel.human_react_ms, duel.human_move_ms, duel.human_wait_ms) == (400, 500, 250)
+    rng = np.random.default_rng(0)
+    seen = set()
+    done_games = 0
+    for _ in range(4000):
+        assert (mask.sum(axis=1) >= 2).all()
+        seen.update(np.unique(side).tolist())
+        obs, scal, mask, side, reward, dt, done, info = duel.step(random_legal(mask, rng))
+        assert info["final_reward"].shape == (8, 2) and info["final_dt_ms"].shape == (8, 2)
+        for i in np.flatnonzero(done):
+            done_games += 1
+            fr = info["final_reward"][i]
+            if info["winner"][i] == 2:
+                assert fr[0] > 0.9 and fr[1] < -0.9
+            elif info["winner"][i] == 1:
+                assert fr[1] > 0.9 and fr[0] < -0.9
+        assert (info["final_reward"][~done] == 0).all()
+        if done_games >= 8:
+            break
+    assert seen == {0, 1} and done_games >= 8
+
+
+def test_duel_human_view_and_read_actions():
+    duel = hasami_env.DuelEnv(n_envs=6, seed=5)
+    obs, scal, mask, side = duel.reset()
+    rng = np.random.default_rng(1)
+    for _ in range(200):
+        read = duel.read_actions()
+        # The read's moves at the machine's decision points, STAY at the human's.
+        assert mask[side == 0, read[side == 0]].all()
+        assert (read[side == 1] == hasami_env.STAY).all()
+        h = side == 1
+        if h.any():
+            # The human's view: its own pieces first, its captures first.
+            assert (obs[h, 0].sum(axis=(1, 2)) == 7 - scal[h, 1]).all()
+            assert (obs[h, 1].sum(axis=(1, 2)) <= 7 - scal[h, 0]).all()
+        act = np.where(side == 0, read, random_legal(mask, rng))
+        obs, scal, mask, side, *_ = duel.step(act)
+
+
+def test_duel_same_seed_same_games_and_illegal_actions_raise():
+    def play(threads):
+        duel = hasami_env.DuelEnv(n_envs=5, seed=9, n_threads=threads)
+        out = [duel.reset()]
+        rng = np.random.default_rng(2)
+        for _ in range(300):
+            out.append(duel.step(random_legal(out[-1][2], rng)))
+        return out
+
+    a, b = play(1), play(3)
+    for x, y in zip(a, b):
+        for u, v in zip(x[:4], y[:4]):
+            np.testing.assert_array_equal(u, v)
+    duel = hasami_env.DuelEnv(n_envs=2, seed=1)
+    obs, scal, mask, side = duel.reset()
+    bad = np.array([np.flatnonzero(~mask[0])[0], np.flatnonzero(mask[1])[0]], dtype=np.int32)
+    with pytest.raises(ValueError):
+        duel.step(bad)
+    with pytest.raises(ValueError):
+        hasami_env.DuelEnv(n_envs=2, human_wait_ms=0)
