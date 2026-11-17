@@ -1,6 +1,6 @@
 # はさみ将棋AI 学習担当マニュアル（11/12〜11/25）
 
-2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移した。続きからの学習、テストの数、第7章のリーグを足した）、本田
+2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移した。続きからの学習、テストの数、第7章のリーグを足した）、11/17 更新（チェックリストを進み具合に合わせた。評価と攻略役を 7-7 の 1 つのコマンドにまとめた。リーグの図を 7-8 に足した。push の認証を個人のトークンにした）、本田
 
 このマニュアルの順に進めると、11/25 の発表に使う学習した AI と評価の表ができます。各章の最後にある「確認」ができたら、次の章へ進んでください。わからないところは、本田に連絡してください。コマンドは、GitHub で見ると各ブロックの右上のボタンでコピーできます。
 
@@ -30,39 +30,39 @@ flowchart LR
 
 ## 締め切りのチェックリスト
 
-終わったものからチェックを付けてください。発表は 11/25 です。
+終わったものからチェックを付けてください。発表は 11/25 です。11/17 の時点で、学習は予定より 2 日ほど早く進んでいます。
 
-### 11/16 まで
+### 済んだこと（11/16〜17）
 
-- [ ] 第1章: 自分の VM でテストが通る（`22 passed`）
-- [ ] 第2章: ランダムな手の 500 局が、マニュアルと同じ数字になる
-- [ ] 第4章: 最新を取り込み、テスト（`22 passed`）と短い学習が最後まで動く
+- [x] 第1章・第2章・第4章: VM の準備、テスト、短い学習
+- [x] 第5章: 本番の学習（相手 B1、速さ 1.0）が 3,000 万決定点まで終わった（11/16、あなたの VM）
+- [x] 学習曲線が上がった（学習中の B1 への勝率 0 → 0.96。Random のボットでの確かめは、B1 にここまで勝てているので省いた）
+- [x] 速さ 0.7 と 1.3 の学習も 3,000 万決定点まで終わった（11/16 夜〜17、本田の VM。予定は 11/19 だった）
+- [x] 速さ 1.0 のリーグが 2000 回の更新まで終わった（11/16、あなたの VM）
+- [x] 速さ 1.3 のリーグが 2000 回の更新まで終わった（11/17、本田の VM）
+- [x] ここまでの結果がすべて main に入った（`runs/b1_s07`、`b1_s10`、`b1_s13`、`league_s10`、`league_s13`。11/17）
+- [x] 3 本の学習曲線と、リーグの勝率の図ができた（`runs/curves.png`、`runs/league_curves.png`。7-8）
 
-### 11/17
+### 11/17〜18（あなた）
 
-- [ ] 第5章: 本番の学習（相手 B1、speed_scale 1.0）を始める
-- [ ] 学習曲線（`log.csv` の `win_rate`）が上がっている
-- [ ] 第6章: Random のボットに勝ち越す（勝率 50% より上）
+- [ ] 最新を取り込む（7-2）
+- [ ] 評価 5 本と攻略役 3 本を、1 つのコマンドで続けて回す（7-7、2 時間半ほど）
+- [ ] 今の読みの数字が、6-2 の基準と一致している（7-7 の確認）
+- [ ] 評価と攻略役の結果を push する（7-7）
 
-### 11/19
+### 11/17〜19（本田）
 
-- [ ] speed_scale 0.7 と 1.3 の学習を始め、3 本が回っている（2 人の VM に分ける。0.7 と 1.3 は本田が 11/16 に始めた）
-- [ ] 第6章: `evaluate.py` で、今の読みの数字が基準の表と一致する
+- [ ] 速さ 0.7 のリーグを終える（11/17 に 341 回目まで進んだ）
+- [ ] 0.7 のリーグを push し、評価する（7-7 の最後）
+- [ ] 3 本のリーグを並べた図を作る（7-8）
+- [ ] 評価と攻略役の結果を main に入れる（PR）
 
-### 11/16〜11/22（リーグ、第7章）
+### 11/24 まで（2 人）
 
-- [ ] 最新を取り込み、テストが `22 passed` になる（7-2）
-- [ ] 速さ 1.0 の学習の結果を push する（7-3）
-- [ ] 速さ 1.0 のリーグを始める（7-4）
-- [ ] 人間の主役への勝率（`main_win`）が下がっていく（人間側が学んでいる）
-- [ ] リーグが終わったら、結果を push する（7-6）
-- [ ] 評価と攻略役（7-7、11/24 までのいつでも）
-
-### 11/24
-
-- [ ] 評価の表（3 本 × 相手 B1・Race）ができる
-- [ ] 対局の録画（GIF）を作る
+- [ ] 評価の表（6-4 の 2 つの表と、7-7 の 2 つの表）を埋める
+- [ ] 対局の録画（GIF）を作る（6-5）
 - [ ] スライドに評価の表と学習曲線を載せる
+- [ ] 発表で話す分担を決める
 
 ## 第1章 VM の準備
 
@@ -261,6 +261,8 @@ python -m pytest python
 | `evaluate.py` | 学習した AI と今の読みを同じ 200 局で比べる（第6章） |
 | `plot_curve.py` | 学習曲線を描く（第5章） |
 | `record_game.py` | 1 局を GIF にする（第6章） |
+| `league.py` | リーグと攻略役（第7章） |
+| `plot_league.py` | リーグの勝率を速さごとに並べて描く（7-8） |
 
 | `ppo.py` の部分 | やっていること |
 | --- | --- |
@@ -362,7 +364,9 @@ python python/train/ppo.py --opponent random --capture-reward 0.5 --steps 5e6 --
 
 これで `win_rate` が上がれば、プログラムは正しく動いています。B1 に戻して、学習の量（`--steps`）を増やします。上がらなければ、「困ったとき」を見てください。
 
-### 5-5 3 本を並べて回す（11/19）
+### 5-5 3 本を並べて回す（11/17 に 3 本とも済んだ）
+
+3 本とも 3,000 万決定点まで終わり、main の `runs/b1_s07`、`runs/b1_s10`、`runs/b1_s13` に入っています。この節は、回し直すときのために残しています。
 
 機械の速さを 3 通りにして学習します。VM は 2 人で 2 台（あなたのものと本田のもの）あるので、速さ 1.0 はあなたの VM、0.7 と 1.3 は本田の VM で回します。VM は 1 台あたり 4 vCPU なので、2 本を同じ VM で回すときは `--threads 2` にし、tmux の画面を分けます（`tmux new -s s07` と `tmux new -s s13`）。
 
@@ -412,7 +416,9 @@ read     race       18.5%    0.5%   1.85   3.77   45.7%
 python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0
 ```
 
-相手 B1・Race・Random のそれぞれで、今の読み（`read`）と学習した AI（`learned`）の行が出ます（5 分ほど）。11/17 の目安は、`learned` の `random` の行の `win` が 50% を超えることです。
+相手 B1・Race・Random のそれぞれで、今の読み（`read`）と学習した AI（`learned`）の行が出ます（5 分ほど）。
+
+11/17 からは、この節と 6-4 のコマンドを 1 つずつ打つ代わりに、7-7 のコマンドで 5 本の AI をまとめて評価します。出た数字で埋めるのは、6-4 の表です。
 
 ### 6-4 発表の表を作る
 
@@ -432,15 +438,7 @@ python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0
 
 発表の筋は、「RU で砦はなくなったが、手書きの読みは B1 への勝率が 82.5% から 58.0% に落ちた。学習でそれを取り戻し、目標の 7 割を超えられるか」です。今の読みの前進の重みを 60〜180 に変えると、RU40 の下では B1 への勝率が 38〜55% に下がりました。つまり 2 行目は、わざと弱くした相手ではなく、手で作れた範囲でいちばん強い読みです。
 
-速さ 0.7 と 1.3 の AI も、同じ速さの環境で評価します。今の読みもその速さで一緒に測られます。
-
-```bash
-python python/train/evaluate.py --model runs/b1_s07/model.pt --speed-scale 0.7 --opponents b1,race
-```
-
-```bash
-python python/train/evaluate.py --model runs/b1_s13/model.pt --speed-scale 1.3 --opponents b1,race
-```
+速さ 0.7 と 1.3 の AI も、同じ速さの環境で評価します。今の読みもその速さで一緒に測られます。コマンドは 7-7 にまとめてあり、結果は `runs/eval/b1_s07.txt` などに残ります。
 
 速さの実験は、出た数字で次の表を埋めます。問いは「遅い機械でも、AI の読みで補えるか」です。
 
@@ -466,6 +464,16 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 ## 第7章 リーグ（自己対局）
 
 速さ 1.0 の学習が終わったら、その AI を出発点にして、人間側も学習させる「リーグ」を回します。TA の助言（人間を模したボットに勝つのは一区切りなので、AlphaZero のような自己対局で強くする、比べる相手を工夫する）を受けて 11/16 に足しました。考え方はプロジェクトの計画（`plans/2026-11-12_ai-enshu-scope.md` の 7 章）にあります。
+
+リーグは、速さごとに 1 本ずつ回しています。
+
+| リーグ | 回した VM | 進み具合 | 結果の場所 |
+| --- | --- | --- | --- |
+| 速さ 1.0 | あなた | 11/16 に 2000 回まで終わった | main の `runs/league_s10` |
+| 速さ 1.3 | 本田 | 11/17 に 2000 回まで終わった | main の `runs/league_s13` |
+| 速さ 0.7 | 本田 | 11/17 に 341 回目まで進んだ | 本田の VM の `runs/league_s07` |
+
+7-2 から 7-6 は 1.0 のリーグを始めたときの手順で、今は済んでいます。あなたがこれからやるのは 7-2（最新を取り込む）と 7-7（評価と攻略役）です。
 
 ### 7-1 何をするか
 
@@ -529,35 +537,80 @@ tail -n 3 runs/league_s10/log.csv
 
 リーグの結果は、ほかの学習とは別の `runs/league_s10` に保存されています（`log.csv` は毎回の更新、`machine.pt`・`human.pt`・`checkpoint.pt` は 50 回ごとと最後、`pool/` に人間の過去の版）。終わったら、まず push します（Git の節。`bash tools/push_results.sh runs/league_s10`）。分析はこのあと、11/24 までのいつでも構いません。
 
-### 7-7 評価と攻略役（あとでまとめて）
+### 7-7 評価と攻略役（11/17〜18、あなたの VM）
 
-評価も攻略役も、保存した `model.pt` と `machine.pt` を読むだけなので、いつやっても同じ結果になります。ただし、リーグを回している最中にやると CPU を取り合ってリーグが遅くなるので、リーグが終わってからにします。
+評価も攻略役も、保存した `model.pt` と `machine.pt` を読むだけなので、いつやっても同じ結果になります。ただし、リーグを回している VM でやると CPU を取り合ってリーグが遅くなります。本田の VM は 0.7 のリーグで埋まっているので、あなたの VM で回します。
 
-まず、固定の相手で学習した AI とリーグの AI を、同じ相手で評価します（Race3 は、2〜3 回置いて取る手を探す、Race より強いボットです）。それぞれ 10 分ほどで 6 行（相手ごとに今の読みと学習した AI）が出ます。発表の表の数字になります。
+評価では、固定の相手で学習した AI 3 本と、リーグの AI 2 本を、それぞれの速さで B1・Race・Race3 と 200 局ずつ戦わせます（Race3 は、2〜3 回置いて取る手を探す、Race より強いボットです）。今の読みも同じ速さで一緒に測られます。攻略役は、決まった機械だけを狙って一から学習する人間側の AI で、その機械が弱点を探しに来る相手にどれだけ耐えるかを測ります。手書きの読み、固定の相手で学習した AI、リーグの AI の 3 つに当てます。
+
+1 つずつ打つと待ち時間が長いので、全部を 1 つのコマンドで続けて回します。評価は 1 本 10 分ほど、攻略役は 1 本 20〜30 分で、合わせて 2 時間半ほどです。まず tmux の画面を開きます。
 
 ```bash
-python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0 --opponents b1,race,race3
+tmux new -s eval
 ```
 
-```bash
-python python/train/evaluate.py --model runs/league_s10/machine.pt --speed-scale 1.0 --opponents b1,race,race3
-```
-
-次に、攻略役を 3 本回します。攻略役は、決まった機械だけを狙って一から学習する人間側の AI です。その機械が、弱点を探しに来る相手にどれだけ耐えるかを測ります。手書きの読み、固定の相手で学習した AI、リーグの AI のそれぞれに当てます（1 本 20〜30 分）。
+開いた画面で、次を打ちます（全体で 1 つのコマンドです）。最初に main を取り込むので、7-2 を先に済ませていなくても構いません。
 
 ```bash
-python python/train/league.py --exploit read --updates 300 --threads 3 --out runs/exploit_read
-```
-
-```bash
-python python/train/league.py --exploit runs/b1_s10/model.pt --updates 300 --threads 3 --out runs/exploit_s10
-```
-
-```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull --no-edit origin main && mkdir -p runs/eval && \
+python -u python/train/evaluate.py --model runs/b1_s07/model.pt --speed-scale 0.7 --opponents b1,race,race3 | tee runs/eval/b1_s07.txt && \
+python -u python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0 --opponents b1,race,race3 | tee runs/eval/b1_s10.txt && \
+python -u python/train/evaluate.py --model runs/b1_s13/model.pt --speed-scale 1.3 --opponents b1,race,race3 | tee runs/eval/b1_s13.txt && \
+python -u python/train/evaluate.py --model runs/league_s10/machine.pt --speed-scale 1.0 --opponents b1,race,race3 | tee runs/eval/league_s10.txt && \
+python -u python/train/evaluate.py --model runs/league_s13/machine.pt --speed-scale 1.3 --opponents b1,race,race3 | tee runs/eval/league_s13.txt && \
+python python/train/league.py --exploit read --updates 300 --threads 3 --out runs/exploit_read && \
+python python/train/league.py --exploit runs/b1_s10/model.pt --updates 300 --threads 3 --out runs/exploit_s10 && \
 python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300 --threads 3 --out runs/exploit_league
 ```
 
-攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。3 本の最後の 20 行の平均を比べると、どの機械がいちばん攻略されにくいかがわかります。`tail -n 20 runs/exploit_read/log.csv` などで見て、発表の表にします。攻略役の結果も、それぞれのフォルダー（`runs/exploit_read` など）に別に保存されます。
+`player   opponent ...` の見出しが出たら、Ctrl+b、d で抜けます。途中で見るときは `tmux attach -t eval` です。評価の結果は画面に出るだけでは消えてしまうので、`tee` で `runs/eval/` の 5 つのファイルにも書いています。
+
+確認: `cat runs/eval/b1_s10.txt` の `read` の `b1` と `race` の行が、6-2 の数字（58.0%、18.5%）と同じになっている。速さ 1.0 の今の読みは誰が測っても同じになるので、違っていたら環境が古いか、別のものを測っています。
+
+全部終わったら（`runs/exploit_league/log.csv` が 300 行目まで進んだら）、評価のファイルと攻略役の結果を push します。`runs/eval` は `push_results.sh` が拾わないファイルなので、先に `git add` します（Git の節）。
+
+```bash
+git add runs/eval && bash tools/push_results.sh runs/exploit_read runs/exploit_s10 runs/exploit_league
+```
+
+数字は次の 2 つの表にまとめます。1 つ目は、固定の相手で学習した AI とリーグの AI の比べです。`runs/eval/` のファイルの `learned` の行から写します。速さ 0.7 の行は、0.7 のリーグが終わってから本田が埋めます。
+
+| 速さ | AI | B1 勝率 | B1 取られた枚数 | Race 勝率 | Race3 勝率 | Race3 取られた枚数 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1.0 | 固定の相手で学習（`b1_s10`） |  |  |  |  |  |
+| 1.0 | リーグ（`league_s10`） |  |  |  |  |  |
+| 1.3 | 固定の相手で学習（`b1_s13`） |  |  |  |  |  |
+| 1.3 | リーグ（`league_s13`） |  |  |  |  |  |
+| 0.7 | 固定の相手で学習（`b1_s07`） |  |  |  |  |  |
+| 0.7 | リーグ（`league_s07`） |  |  |  |  |  |
+
+2 つ目は攻略役の表です。攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。最後の 20 行（281〜300 回目）の平均を写します。`tail -n 20 runs/exploit_read/log.csv` で見られます。機械の勝率が高く、取られた枚数が少ないほど、攻略されにくい機械です。
+
+| 攻略役が狙った機械 | 機械の勝率（`main_win`） | 取られた枚数（`main_lost`） |
+| --- | --- | --- |
+| 今の読み（`exploit_read`） |  |  |
+| 固定の相手で学習（`exploit_s10`） |  |  |
+| リーグ（`exploit_league`） |  |  |
+
+0.7 のリーグが終わったら、本田が本田の VM で次を回して push します。
+
+```bash
+python -u python/train/evaluate.py --model runs/league_s07/machine.pt --speed-scale 0.7 --opponents b1,race,race3 | tee runs/eval/league_s07.txt
+```
+
+```bash
+git add runs/eval && bash tools/push_results.sh runs/league_s07
+```
+
+### 7-8 リーグの図を作る
+
+3 本の学習を重ねた図（5-2）に加えて、リーグの機械の勝率を、B1・人間の主役・人間の過去の版のそれぞれについて、速さごとに 1 本の線で描きます。線は、前後 25 回の更新の局数で重みをつけた平均です。どの図でも、0.7 は青、1.0 は橙、1.3 は緑の線になります。
+
+```bash
+python python/train/plot_league.py runs/league_s07 runs/league_s10 runs/league_s13
+```
+
+`runs/league_curves.png` にできます。1.0 と 1.3 だけの図は、main の `runs/league_curves.png` にすでに入っています。
 
 ## 困ったとき
 
@@ -578,7 +631,8 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 | `torch.cuda.is_available()` が False | Python 環境が有効でない | `source ~/venv/bin/activate`。それでも False なら `nvidia-smi` の出力を TA に送る |
 | SSH が切れた | ネットワーク | tmux の中なら学習は続いている。つなぎ直して `tmux attach -t train` |
 | 学習が途中で止まった（VM を止めたなど） | VM を止めると tmux の中も止まる | `--out` を同じにして `--resume` を付けると、50 回ごとに保存した `checkpoint.pt` から続く（5-1）。50 回目より前に止まったときは最初からやり直す |
-| push で `Authentication failed` か 403 と出る | トークンが違うか、期限が切れている | 新しいトークンで Git の節の設定をやり直す |
+| push で `Password authentication is not supported` と出る | Password の欄に GitHub のパスワードを入れた | パスワードの代わりに個人のトークンを入れる（Git の節） |
+| push で `Authentication failed` か 403 と出る | トークンが違うか、期限が切れているか、Contents の書き込みの権限がない | トークンを作り直す（Git の節）。古いものは `rm ~/.git-credentials` で消してから push し直す |
 | `No space left on device` | ディスクがいっぱい | `df -h` と `du -sh runs/*` で確かめ、要らない `runs` の中身を消す |
 
 ## 決まりごと
@@ -589,11 +643,14 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 | --- | --- | --- |
 | 学習用の環境（C++、pybind11、wheel） | 作った。直すのも本田 | 使う。足りないものは本田に頼む |
 | 学習のプログラム（`python/train`） | ひな形を用意した | 使って、必要に応じて直す |
-| 学習（速さ 1.0、11/17 から） |  | 自分の VM で回す |
-| 学習（速さ 0.7 と 1.3、11/16 から） | 自分の VM で回し、`log.csv` と `model.pt` を push する |  |
+| 学習（速さ 1.0） |  | 11/16 に済んだ |
+| 学習（速さ 0.7 と 1.3） | 11/17 に済んだ |  |
 | リーグの環境（人間側も Python から指す DuelEnv）とプログラム（`league.py`） | 作った。直すのも本田 | 使う |
-| リーグ（速さ 1.0、11/16 から）と攻略役 |  | 自分の VM で回し、評価して push する（第7章） |
-| 評価の表、学習曲線、対局の GIF（11/24 まで） |  | 3 本ぶん作る |
+| リーグ（速さ 1.0） |  | 11/16 に済んだ |
+| リーグ（速さ 1.3 と 0.7） | 1.3 は 11/17 に済んだ。0.7 は回している |  |
+| 評価（5 本）と攻略役（3 本） |  | 自分の VM で回して push する（7-7） |
+| 0.7 のリーグの評価、リーグの図、結果を main に入れる PR | やる |  |
+| 評価の表、対局の GIF（11/24 まで） | 0.7 の行を埋める | 表を埋め、GIF を作る |
 | スライド | 構成を確かめる | 下書きを作る |
 | 発表で話す分担 | 2 人で決める | 2 人で決める |
 
@@ -601,12 +658,16 @@ python python/train/league.py --exploit runs/league_s10/machine.pt --updates 300
 
 ### Git
 
-学習の結果は、`tools/push_results.sh` で push します。VM ごとに `results/VM の名前`（`results/aiexp-03` など）というブランチに入るので、2 台がぶつかることはなく、main も書き換えません。
+学習の結果は、`tools/push_results.sh` で push します。VM ごとに `results/VM の名前`（`results/aiexp-03` など）というブランチに入るので、2 台がぶつかることはなく、main も書き換えません。main に入れるのは、本田が PR を作ってマージします。
 
-最初に 1 回だけ、共有のトークンで push 先を設定します（`TOKEN` のところをトークンに置き換えます）。
+GitHub は、push のときにアカウントのパスワードを受け付けません。Password の欄には、自分のアカウントで作ったトークンを入れます。すでにその VM から push できている人は、この準備はいりません。
+
+トークンは、GitHub の右上のアイコンから Settings、Developer settings、Personal access tokens、Fine-grained tokens、Generate new token の順に進んで作ります。変えるのは 3 つだけです。Expiration は 30 日（VM は 11 月末に回収されます）、Repository access は Only select repositories で `hasami-shogi` だけ、Permissions は Repository permissions の Contents を Read and write にします。出てきた `github_pat_` で始まる文字列は 1 回しか表示されないので、コピーしておきます。
+
+VM で、入れたトークンを覚えておく設定をします。最初の push で Username に GitHub のユーザー名、Password にトークンを入れると、`~/.git-credentials` に保存され、次からは聞かれません。このトークンで書き込めるのは `hasami-shogi` だけで、30 日で切れます。VM を返す前に、GitHub の同じページでトークンを消しておきます。
 
 ```bash
-cd ~/hasami-shogi && git remote set-url origin https://token:TOKEN@github.com/SoyaHonda/hasami-shogi.git
+git config --global credential.helper store
 ```
 
 結果を push するときは、学習のフォルダーを並べて打ちます。
@@ -619,7 +680,9 @@ bash tools/push_results.sh runs/b1_s10
 bash tools/push_results.sh runs/league_s10
 ```
 
-それぞれのフォルダーの `log.csv`、`model.pt`、`machine.pt`、`human.pt` のうちあるものをコミットして push し、最後に `pushed to results/...` と出ます。`checkpoint.pt` と `pool/` は続きから学習するためのものなので push しません。攻略役のフォルダー（`runs/exploit_read` など）も同じように push できます。自分で直したプログラムも一緒に入れたいときは、先に `git add python/train/直したファイル` を打ってから同じコマンドを打ちます。
+それぞれのフォルダーの `log.csv`、`model.pt`、`machine.pt`、`human.pt` のうちあるものをコミットして push し、最後に `pushed to results/...` と出ます。`checkpoint.pt` と `pool/` は続きから学習するためのものなので push しません。攻略役のフォルダー（`runs/exploit_read` など）も同じように push できます。評価の結果（`runs/eval`）や自分で直したプログラムのように、この 4 つ以外のファイルも一緒に入れたいときは、先に `git add runs/eval` や `git add python/train/直したファイル` を打ってから同じコマンドを打ちます。
+
+`push_results: no changes since the last push; pushing again anyway` と出るのは、前に打ったときにコミットまではできていて、push だけが失敗していたときです。新しいコミットは作らずに、そのコミットを push し直すので、そのままで構いません。
 
 ### VM
 
