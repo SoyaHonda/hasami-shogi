@@ -623,6 +623,7 @@ python python/train/plot_league.py runs/league_s07 runs/league_s10 runs/league_s
 | テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | 4-1 の 2 つのコマンドを打ち直す |
 | `git pull` しても Already up to date で、本田が直したはずのファイルが来ない | 今いるブランチが main ではない（`git status -sb` の 1 行目でわかる） | `git pull --no-edit origin main` で main の更新を取り込む（4-1） |
 | テストの数が 22 より少ない | 古いプログラムのまま | 4-1 の 2 つのコマンドを打つ |
+| `git pull` で `untracked working tree files would be overwritten by merge` と出て止まる | 手元にだけあるファイル（`runs/test` など）と同じ名前のファイルが main に入った | 挙がったフォルダーの名前を変えてよけ（`mv runs/test runs/test_old` など）、同じコマンドを打ち直す |
 | `git pull --no-edit origin main` で `CONFLICT` と出る | 自分で直したファイルと、本田が直したファイルがぶつかった | `git merge --abort` で取り込む前に戻す。自分で直したファイルを別の名前で写しておき、`git checkout -- ファイル名` で元に戻してから、4-1 をやり直す |
 | `No module named 'league'` か、リーグのテストがない | リーグを足す前のプログラムのまま | 4-1 の 2 つのコマンドを打つ |
 | `ValueError: action ... is not in its mask` | 選べない手を渡した | `model.py` の `masked_fill(~mask, -1e9)` を消していないか、別の step の mask を使っていないか確かめる |
