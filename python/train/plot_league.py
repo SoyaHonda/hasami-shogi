@@ -46,9 +46,12 @@ def main(argv=None):
         ax.set_title(f"machine win rate {title}")
         ax.set_xlabel("update")
         ax.set_ylim(0, 1.02)
-    finish_axes(axes)
+    # 線が上下に大きく動くので、凡例は各図の中ではなく図の上に 1 つだけ置く。
+    finish_axes(axes, legend=False)
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="upper center", ncol=len(runs), frameon=False)
     out = os.path.join(os.path.dirname(os.path.normpath(runs[0])), "league_curves.png")
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
     fig.savefig(out, dpi=120)
     print("wrote", out)
     return out
