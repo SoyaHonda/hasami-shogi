@@ -1,6 +1,6 @@
 # はさみ将棋AI 学習担当マニュアル（11/12〜11/25）
 
-2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移した。続きからの学習、テストの数、第7章のリーグを足した）、11/17 更新（チェックリストを進み具合に合わせた。評価と攻略役を 7-7 の 1 つのコマンドにまとめた。リーグの図を 7-8 に足した。push の認証を個人のトークンにした）、本田
+2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移した。続きからの学習、テストの数、第7章のリーグを足した）、11/17 更新（チェックリストを進み具合に合わせた。評価と攻略役を 7-7 の 1 つのコマンドにまとめた。リーグの図を 7-8 に足した。push の認証を個人のトークンにした。夕方、評価と攻略役の結果を 6-4 と 7-7 の表に書き込んだ）、11/19 更新（攻略役で機械を鍛え直す 7-9 を足した）、本田
 
 このマニュアルの順に進めると、11/25 の発表に使う学習した AI と評価の表ができます。各章の最後にある「確認」ができたら、次の章へ進んでください。わからないところは、本田に連絡してください。コマンドは、GitHub で見ると各ブロックの右上のボタンでコピーできます。
 
@@ -43,19 +43,29 @@ flowchart LR
 - [x] ここまでの結果がすべて main に入った（`runs/b1_s07`、`b1_s10`、`b1_s13`、`league_s10`、`league_s13`。11/17）
 - [x] 3 本の学習曲線と、リーグの勝率の図ができた（`runs/curves.png`、`runs/league_curves.png`。7-8）
 
-### 11/17〜18（あなた）
+### 11/17（あなた）
 
-- [ ] 最新を取り込む（7-2）
-- [ ] 評価 5 本と攻略役 3 本を、1 つのコマンドで続けて回す（7-7、2 時間半ほど）
-- [ ] 今の読みの数字が、6-2 の基準と一致している（7-7 の確認）
-- [ ] 評価と攻略役の結果を push する（7-7）
+- [x] 最新を取り込む（7-2）
+- [x] 評価 5 本と攻略役 3 本を、1 つのコマンドで続けて回す（7-7。1 時間ほどで終わった）
+- [x] 今の読みの数字が、6-2 の基準と一致している（58.0%、18.5%）
+- [x] 評価と攻略役の結果を push する（`results/aiexp-08`）
 
-### 11/17〜19（本田）
+### 11/17〜18（本田）
 
-- [ ] 速さ 0.7 のリーグを終える（11/17 に 341 回目まで進んだ）
-- [ ] 0.7 のリーグを push し、評価する（7-7 の最後）
-- [ ] 3 本のリーグを並べた図を作る（7-8）
-- [ ] 評価と攻略役の結果を main に入れる（PR）
+- [x] 速さ 0.7 のリーグを終える（11/17 の 17 時すぎ）
+- [x] 0.7 のリーグを push し、評価する（7-7 の最後）
+- [x] 3 本のリーグを並べた図を作る（7-8）
+- [x] 評価と攻略役の結果を main に入れる（PR）
+- [x] 速さ 1.3 と 0.7 の機械にも攻略役を当てる（7-7 の最後。11/17 夜）
+- [x] その結果を push し、7-7 の攻略役の表に書き足す
+
+### 11/19〜20（2 人、7-9）
+
+- [ ] 2 台とも最新を取り込む（`league.py` に `--fixed-human` が入った。wheel は変わっていない）
+- [ ] あなたの VM で、速さ 1.0 の鍛え直し・攻略役・評価を続けて回す（1 時間半ほど）
+- [ ] 本田の VM で、速さ 1.3 と 0.7 を続けて回す（3 時間ほど）
+- [ ] 結果を push する
+- [ ] 7-9 の表を埋め、鍛え直しで攻略役に取られる枚数が減ったかを確かめる
 
 ### 11/24 まで（2 人）
 
@@ -426,7 +436,7 @@ python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0
 
 | AI | ルール | B1 勝率 | B1 取られた枚数 | Race 勝率 | Race 取られた枚数 |
 | --- | --- | --- | --- | --- | --- |
-| 学習した AI | RE＋RW＋RU40（正式） |  |  |  |  |
+| 学習した AI | RE＋RW＋RU40（正式） | 96.5% | 1.01 | 44.0% | 3.33 |
 | 今の読み（つよい） | RE＋RW＋RU40（正式） | 58.0% | 2.33 | 18.5% | 3.77 |
 | 今の読み（つよい、参考） | RE＋RW（RU なし） | 82.5% | 1.04 | 29.0% | 3.24 |
 
@@ -445,11 +455,13 @@ python python/train/evaluate.py --model runs/b1_s10/model.pt --speed-scale 1.0
 | 速さ | AI | B1 勝率 | B1 取られた枚数 | Race 勝率 | Race 取られた枚数 | 外にいた割合（B1） |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1.0 | 今の読み | 58.0% | 2.33 | 18.5% | 3.77 | 44.1% |
-| 1.0 | 学習 |  |  |  |  |  |
-| 0.7 | 今の読み |  |  |  |  |  |
-| 0.7 | 学習 |  |  |  |  |  |
-| 1.3 | 今の読み |  |  |  |  |  |
-| 1.3 | 学習 |  |  |  |  |  |
+| 1.0 | 学習 | 96.5% | 1.01 | 44.0% | 3.33 | 35.7% |
+| 0.7 | 今の読み | 17.0% | 3.70 | 2.0% | 4.23 | 32.1% |
+| 0.7 | 学習 | 92.5% | 1.66 | 42.0% | 3.37 | 54.8% |
+| 1.3 | 今の読み | 78.0% | 1.61 | 42.5% | 3.07 | 52.2% |
+| 1.3 | 学習 | 99.0% | 0.24 | 65.0% | 2.18 | 44.8% |
+
+（11/17 に測った。`runs/eval/b1_s07.txt`、`b1_s10.txt`、`b1_s13.txt`）学習した AI は、どの速さでも B1 に 9 割以上勝った。速さ 0.7 の学習した AI（92.5%）は、速さ 1.3 の今の読み（78.0%）より強い。遅い機械でも、読みで補えることになる。
 
 ### 6-5 対局を録画する
 
@@ -471,7 +483,7 @@ python python/train/record_game.py runs/b1_s10/model.pt --opponent b1 --seed 7 -
 | --- | --- | --- | --- |
 | 速さ 1.0 | あなた | 11/16 に 2000 回まで終わった | main の `runs/league_s10` |
 | 速さ 1.3 | 本田 | 11/17 に 2000 回まで終わった | main の `runs/league_s13` |
-| 速さ 0.7 | 本田 | 11/17 に 341 回目まで進んだ | 本田の VM の `runs/league_s07` |
+| 速さ 0.7 | 本田 | 11/17 に 2000 回まで終わった | main の `runs/league_s07` |
 
 7-2 から 7-6 は 1.0 のリーグを始めたときの手順で、今は済んでいます。あなたがこれからやるのは 7-2（最新を取り込む）と 7-7（評価と攻略役）です。
 
@@ -577,22 +589,32 @@ git add runs/eval && bash tools/push_results.sh runs/exploit_read runs/exploit_s
 
 | 速さ | AI | B1 勝率 | B1 取られた枚数 | Race 勝率 | Race3 勝率 | Race3 取られた枚数 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1.0 | 固定の相手で学習（`b1_s10`） |  |  |  |  |  |
-| 1.0 | リーグ（`league_s10`） |  |  |  |  |  |
-| 1.3 | 固定の相手で学習（`b1_s13`） |  |  |  |  |  |
-| 1.3 | リーグ（`league_s13`） |  |  |  |  |  |
-| 0.7 | 固定の相手で学習（`b1_s07`） |  |  |  |  |  |
-| 0.7 | リーグ（`league_s07`） |  |  |  |  |  |
+| 1.0 | 固定の相手で学習（`b1_s10`） | 96.5% | 1.01 | 44.0% | 18.5% | 3.94 |
+| 1.0 | リーグ（`league_s10`） | 95.5% | 0.82 | 41.5% | 10.5% | 3.98 |
+| 1.3 | 固定の相手で学習（`b1_s13`） | 99.0% | 0.24 | 65.0% | 73.5% | 1.82 |
+| 1.3 | リーグ（`league_s13`） | 99.0% | 0.26 | 55.5% | 55.0% | 2.48 |
+| 0.7 | 固定の相手で学習（`b1_s07`） | 92.5% | 1.66 | 42.0% | 36.0% | 3.57 |
+| 0.7 | リーグ（`league_s07`） | 97.5% | 1.29 | 36.0% | 30.5% | 3.50 |
+
+（11/17 に測った）リーグの AI は、3 つの速さとも Race と Race3 への勝率が固定の相手で学習した AI より下がった。上がったのは 0.7 の B1 だけ。速さ 1.0 の今の読みは Race3 に 24.0% 勝つので、1.0 では学習した AI 2 本とも Race3 には今の読みより弱い。
 
 2 つ目は攻略役の表です。攻略役の `log.csv` では、`main_win` が攻略役を相手にした機械の勝率、`main_lost` が攻略役に取られた枚数／局です。最後の 20 行（281〜300 回目）の平均を写します。`tail -n 20 runs/exploit_read/log.csv` で見られます。機械の勝率が高く、取られた枚数が少ないほど、攻略されにくい機械です。
 
-| 攻略役が狙った機械 | 機械の勝率（`main_win`） | 取られた枚数（`main_lost`） |
-| --- | --- | --- |
-| 今の読み（`exploit_read`） |  |  |
-| 固定の相手で学習（`exploit_s10`） |  |  |
-| リーグ（`exploit_league`） |  |  |
+| 速さ | 攻略役が狙った機械 | 機械の勝率（`main_win`） | 機械が取った枚数（`main_taken`） | 取られた枚数（`main_lost`） |
+| --- | --- | --- | --- | --- |
+| 1.0 | 今の読み（`exploit_read`） | 84.7% | 3.42 | 0.72 |
+| 1.0 | 固定の相手で学習（`exploit_s10`） | 26.9% | 0.69 | 0.67 |
+| 1.0 | リーグ（`exploit_league`） | 22.2% | 1.96 | 3.58 |
+| 1.3 | 固定の相手で学習（`exploit_s13`） | 8.1% | 0.76 | 1.76 |
+| 1.3 | リーグ（`exploit_league_s13`） | 58.0% | 3.26 | 2.40 |
+| 0.7 | 固定の相手で学習（`exploit_s07`） | 11.9% | 0.12 | 0.01 |
+| 0.7 | リーグ（`exploit_league_s07`） | 31.4% | 0.90 | 0.84 |
 
-0.7 のリーグが終わったら、本田が本田の VM で次を回して push します。
+（11/17 に測った。最後の 20 回を局数で重みづけした平均）リーグの機械は、攻略役に 1 局あたり 3.6 枚取られた。攻略役は 100〜150 回目で攻め方を見つけ、そこから短い局で勝ち続けた。固定の相手で学習した機械は 0.7 枚しか取られないが、攻略役が守りを固めると自分も 0.5 枚ほどしか取れず、勝ち切れない。今の読みは攻略役にも 85% 勝つ。速さ 1.0 のリーグで 1,400 回目から機械が急に勝ち出したのは、強くなったのではなく、崩れた人間の主役と過去の版にだけ効く指し方に偏ったためと読める。攻略役は種 1 つ・300 回の結果なので、言えるのは「この設定のリーグでは、攻略されにくくはならなかった」まで。
+
+速さ 1.3 と 0.7 でも、攻略役に取られた枚数はリーグの機械のほうが多かった（1.3 は 1.76 と 2.40、0.7 は 0.01 と 0.84）。ただし機械の勝率だけを見ると逆に見えるので、読み方に気をつける。人間側の報酬には引き分けの罰がないので、攻略役は機械に勝てないと、駒を動かさずに守って引き分けに持ち込むことを覚える。固定の相手で学習した機械は、0.7・1.0・1.3 のどれでも、この守りを崩せずに勝率が 8〜27% まで下がった（0.7 では 1 局に 0.12 枚しか取れない）。リーグの機械に対しては、攻略役は守りではなく攻めを覚えた。1.3 のリーグの攻略役は 300 回目でもまだ取る枚数が増えていて（50 回ごとに 0.29 → 2.48）、学習しきっていない。今の読みは守りを固める攻略役にも 85% 勝つので、固定の相手で学習した AI には「守る人間を崩せない」という、B1 との勝率には出ない弱点がある。
+
+0.7 のリーグの評価は、本田が本田の VM で次のように回して push しました（11/17）。
 
 ```bash
 python -u python/train/evaluate.py --model runs/league_s07/machine.pt --speed-scale 0.7 --opponents b1,race,race3 | tee runs/eval/league_s07.txt
@@ -600,6 +622,19 @@ python -u python/train/evaluate.py --model runs/league_s07/machine.pt --speed-sc
 
 ```bash
 git add runs/eval && bash tools/push_results.sh runs/league_s07
+```
+
+速さ 1.3 と 0.7 の機械に当てる攻略役 4 本も、本田の VM で続けて回して push しました（11/17 夜、1 時間ほど）。
+
+```bash
+python python/train/league.py --exploit runs/b1_s13/model.pt --speed-scale 1.3 --updates 300 --threads 3 --out runs/exploit_s13 && \
+python python/train/league.py --exploit runs/league_s13/machine.pt --speed-scale 1.3 --updates 300 --threads 3 --out runs/exploit_league_s13 && \
+python python/train/league.py --exploit runs/b1_s07/model.pt --speed-scale 0.7 --updates 300 --threads 3 --out runs/exploit_s07 && \
+python python/train/league.py --exploit runs/league_s07/machine.pt --speed-scale 0.7 --updates 300 --threads 3 --out runs/exploit_league_s07
+```
+
+```bash
+bash tools/push_results.sh runs/exploit_s13 runs/exploit_league_s13 runs/exploit_s07 runs/exploit_league_s07
 ```
 
 ### 7-8 リーグの図を作る
@@ -610,7 +645,73 @@ git add runs/eval && bash tools/push_results.sh runs/league_s07
 python python/train/plot_league.py runs/league_s07 runs/league_s10 runs/league_s13
 ```
 
-`runs/league_curves.png` にできます。1.0 と 1.3 だけの図は、main の `runs/league_curves.png` にすでに入っています。
+`runs/league_curves.png` にできます。3 本を並べた図は、main の `runs/league_curves.png` に入っています（11/17）。
+
+図から読めること: B1 への勝率は 3 本とも下がらなかった。人間の主役への機械の勝率は、1.3 では 0.6〜0.9 で動き続け、0.7 では 0.15〜0.5 と人間の主役に負け越したまま終わった。1.0 だけが、1,400〜1,550 回目に 0.2 から 1.0 近くへ跳ね、過去の版への勝率も同じころ 0.98 まで上がった（7-7 の攻略役の結果を参照）。
+
+### 7-9 攻略役で鍛え直す（11/19〜20）
+
+7-7 の攻略役から、機械の弱点が 2 つわかりました。固定の相手で学習した機械は、守りに徹する人間を崩せません。リーグの機械は、攻め方を覚えた攻略役に負けます。どちらも、機械がそういう指し方の相手と一度も対局していないことが原因です。B1 は守りに徹しませんし、速さ 1.0 のリーグでは人間の主役が途中で崩れていました。
+
+そこで、7-7 で見つかった攻略役そのものを、機械の練習相手としてリーグに混ぜます。AlphaStar が攻略役（exploiter）をリーグに入れて、主役の弱点をふさいだのと同じ考え方です。`league.py` に、このための 2 つの設定を足しました。
+
+| 設定 | 意味 |
+| --- | --- |
+| `--fixed-human 攻略役の human.pt` | その人間を、ずっとプールに残る相手として入れる。何本でも並べられる。PFSP は過去の版と同じように選ぶ |
+| `--pfsp-window 200` | PFSP が、それぞれの相手との直近 200 局ほどだけで勝率を数える。機械が勝てるようになった相手は、だんだん選ばれなくなる |
+
+機械は、固定の相手で学習したもの（`b1_s10` など）から始めます。対局の半分は今までどおり B1 で、残りの 3 割を新しく学ぶ人間の主役（`--main-share 0.3`）、7 割を攻略役と人間の主役の過去の版にします。600 回の更新のあと、鍛え直した機械に一から攻略役を当て（7-7 と同じ 300 回）、B1・Race・Race3 でも評価します。ここまでを 1 つのコマンドで続けて回します。`log.csv` の最後の 3 列（`fixed_games`、`fixed_win`、`fixed_lost`）が、プールに入れた攻略役との局数、機械の勝率、取られた枚数です。
+
+始める前に、2 台とも 7-2 のとおり最新を取り込みます（下のコマンドの最初でも取り込みます）。止めていた VM は、ポータルで「開始」を押してからつなぎます。
+
+あなたの VM では速さ 1.0 を回します（1 時間半ほど）。
+
+```bash
+tmux new -s hard
+```
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull --no-edit origin main && mkdir -p runs/eval && \
+python python/train/league.py --init-machine runs/b1_s10/model.pt --speed-scale 1.0 --fixed-human runs/exploit_s10/human.pt --fixed-human runs/exploit_league/human.pt --fixed-human runs/exploit_read/human.pt --main-share 0.3 --pfsp-window 200 --updates 600 --threads 3 --out runs/hard_s10 && \
+python python/train/league.py --exploit runs/hard_s10/machine.pt --speed-scale 1.0 --updates 300 --threads 3 --out runs/exploit_hard_s10 && \
+python -u python/train/evaluate.py --model runs/hard_s10/machine.pt --speed-scale 1.0 --opponents b1,race,race3 | tee runs/eval/hard_s10.txt
+```
+
+本田の VM では、速さ 1.3 と 0.7 を続けて回します（3 時間ほど）。
+
+```bash
+tmux new -s hard
+```
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull --no-edit origin main && mkdir -p runs/eval && \
+python python/train/league.py --init-machine runs/b1_s13/model.pt --speed-scale 1.3 --fixed-human runs/exploit_s13/human.pt --fixed-human runs/exploit_league_s13/human.pt --main-share 0.3 --pfsp-window 200 --updates 600 --threads 3 --out runs/hard_s13 && \
+python python/train/league.py --exploit runs/hard_s13/machine.pt --speed-scale 1.3 --updates 300 --threads 3 --out runs/exploit_hard_s13 && \
+python -u python/train/evaluate.py --model runs/hard_s13/machine.pt --speed-scale 1.3 --opponents b1,race,race3 | tee runs/eval/hard_s13.txt && \
+python python/train/league.py --init-machine runs/b1_s07/model.pt --speed-scale 0.7 --fixed-human runs/exploit_s07/human.pt --fixed-human runs/exploit_league_s07/human.pt --main-share 0.3 --pfsp-window 200 --updates 600 --threads 3 --out runs/hard_s07 && \
+python python/train/league.py --exploit runs/hard_s07/machine.pt --speed-scale 0.7 --updates 300 --threads 3 --out runs/exploit_hard_s07 && \
+python -u python/train/evaluate.py --model runs/hard_s07/machine.pt --speed-scale 0.7 --opponents b1,race,race3 | tee runs/eval/hard_s07.txt
+```
+
+進み具合は、`tail -n 1 runs/hard_s10/log.csv` などで見ます（左端が更新の回数で、600 で終わり）。終わったら push します。
+
+```bash
+git add runs/eval && bash tools/push_results.sh runs/hard_s10 runs/exploit_hard_s10
+```
+
+```bash
+git add runs/eval && bash tools/push_results.sh runs/hard_s13 runs/exploit_hard_s13 runs/hard_s07 runs/exploit_hard_s07
+```
+
+結果は次の表にまとめます。攻略役の列は 7-7 と同じく最後の 20 回の平均で、「前」は 7-7 の固定の相手で学習した機械の行です。鍛え直しがうまくいけば、新しい攻略役に取られる枚数が「前」より減り、B1・Race・Race3 への勝率は下がりません。
+
+| 速さ | 攻略役に対する機械の勝率（前 → 後） | 攻略役に取られた枚数（前 → 後） | B1 勝率（前 → 後） | Race 勝率（前 → 後） | Race3 勝率（前 → 後） |
+| --- | --- | --- | --- | --- | --- |
+| 1.0 | 26.9% → | 0.67 → | 96.5% → | 44.0% → | 18.5% → |
+| 1.3 | 8.1% → | 1.76 → | 99.0% → | 65.0% → | 73.5% → |
+| 0.7 | 11.9% → | 0.01 → | 92.5% → | 42.0% → | 36.0% → |
+
+うまくいく保証はありません。新しい攻略役は、600 回の練習で覚えた守り方のさらに裏をかいてくるかもしれません。そのときは、新しい攻略役もプールに足してもう 1 周回す（攻略役を見つける、プールに入れる、鍛え直す、をくり返す）のが次の手です。
 
 ## 困ったとき
 
@@ -623,6 +724,7 @@ python python/train/plot_league.py runs/league_s07 runs/league_s10 runs/league_s
 | テストで `test_build_matches_sources` だけが落ちる | 本田が C++ を変え、wheel が古い | 4-1 の 2 つのコマンドを打ち直す |
 | `git pull` しても Already up to date で、本田が直したはずのファイルが来ない | 今いるブランチが main ではない（`git status -sb` の 1 行目でわかる） | `git pull --no-edit origin main` で main の更新を取り込む（4-1） |
 | テストの数が 22 より少ない | 古いプログラムのまま | 4-1 の 2 つのコマンドを打つ |
+| `git pull` で `untracked working tree files would be overwritten by merge` と出て止まる | 手元にだけあるファイル（`runs/test` など）と同じ名前のファイルが main に入った | 挙がったフォルダーの名前を変えてよけ（`mv runs/test runs/test_old` など）、同じコマンドを打ち直す |
 | `git pull --no-edit origin main` で `CONFLICT` と出る | 自分で直したファイルと、本田が直したファイルがぶつかった | `git merge --abort` で取り込む前に戻す。自分で直したファイルを別の名前で写しておき、`git checkout -- ファイル名` で元に戻してから、4-1 をやり直す |
 | `No module named 'league'` か、リーグのテストがない | リーグを足す前のプログラムのまま | 4-1 の 2 つのコマンドを打つ |
 | `ValueError: action ... is not in its mask` | 選べない手を渡した | `model.py` の `masked_fill(~mask, -1e9)` を消していないか、別の step の mask を使っていないか確かめる |
@@ -647,9 +749,12 @@ python python/train/plot_league.py runs/league_s07 runs/league_s10 runs/league_s
 | 学習（速さ 0.7 と 1.3） | 11/17 に済んだ |  |
 | リーグの環境（人間側も Python から指す DuelEnv）とプログラム（`league.py`） | 作った。直すのも本田 | 使う |
 | リーグ（速さ 1.0） |  | 11/16 に済んだ |
-| リーグ（速さ 1.3 と 0.7） | 1.3 は 11/17 に済んだ。0.7 は回している |  |
-| 評価（5 本）と攻略役（3 本） |  | 自分の VM で回して push する（7-7） |
-| 0.7 のリーグの評価、リーグの図、結果を main に入れる PR | やる |  |
+| リーグ（速さ 1.3 と 0.7） | 11/17 に済んだ |  |
+| 評価（5 本）と攻略役（3 本） |  | 11/17 に済んだ（7-7） |
+| 0.7 のリーグの評価、リーグの図、結果を main に入れる PR | 11/17 に済んだ |  |
+| 速さ 1.3 と 0.7 の攻略役（4 本） | 11/17 夜に済んだ |  |
+| `league.py` の `--fixed-human` と `--pfsp-window`（7-9） | 作った |  |
+| 攻略役で鍛え直す（7-9、11/19〜20） | 1.3 と 0.7 を回す | 1.0 を回す |
 | 評価の表、対局の GIF（11/24 まで） | 0.7 の行を埋める | 表を埋め、GIF を作る |
 | スライド | 構成を確かめる | 下書きを作る |
 | 発表で話す分担 | 2 人で決める | 2 人で決める |

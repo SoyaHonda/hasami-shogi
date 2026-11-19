@@ -167,3 +167,42 @@ def test_a_short_league_resumes_and_an_exploiter_runs(tmp_path, capsys):
         league.main(["--exploit", target, "--updates", "1", "--duel-envs", "8", "--rollout", "16", "--threads", "2",
                      "--out", ex])
         assert os.path.exists(os.path.join(ex, "human.pt"))
+
+
+def test_fixed_humans_stay_in_the_pool_and_resume(tmp_path):
+    import csv
+
+    import league
+
+    base = str(tmp_path / "base")
+    small = ["--b1-envs", "8", "--duel-envs", "8", "--rollout", "24", "--threads", "2"]
+    league.main(["--updates", "1", "--out", base] + small)
+    out = str(tmp_path / "hard")
+    fixed = os.path.join(base, "human.pt")
+    league.main(["--updates", "3", "--snapshot-every", "1", "--pool-size", "1", "--main-share", "0",
+                 "--fixed-human", fixed, "--fixed-human", fixed, "--pfsp-window", "50", "--out", out] + small)
+    # The two fixed humans stay; of the snapshots only the newest (pool size 1) is left.
+    ckpt = torch.load(os.path.join(out, "checkpoint.pt"), weights_only=False)
+    assert sorted(ckpt["pfsp"]) == [3, 100001, 100002]
+    with open(os.path.join(out, "log.csv")) as f:
+        assert next(csv.reader(f))[-3:] == ["fixed_games", "fixed_win", "fixed_lost"]
+    league.main(["--resume", "--updates", "4", "--out", out, "--threads", "2"])
+    ckpt = torch.load(os.path.join(out, "checkpoint.pt"), weights_only=False)
+    assert sorted(ckpt["pfsp"]) == [4, 100001, 100002] and ckpt["args"]["pfsp_window"] == 50
+
+
+def test_pfsp_window_lets_old_results_fade():
+    import league
+
+    p = league.Pfsp(np.random.default_rng(0), window=10)
+    p.add_version(1)
+    for _ in range(100):
+        p.record(1, 1)  # the machine loses
+    for _ in range(30):
+        p.record(1, 2)  # then wins
+    assert p.win_rate(1) > 0.8  # about the last 10 games, all won
+    q = league.Pfsp(np.random.default_rng(0))
+    q.add_version(1)
+    for w in [1] * 100 + [2] * 30:
+        q.record(1, w)
+    assert q.win_rate(1) < 0.3

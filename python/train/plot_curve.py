@@ -24,8 +24,8 @@ def colors_for(names):
     return [SPEED_COLORS.get(n.rsplit("_", 1)[-1]) or next(spare) for n in names]
 
 
-def finish_axes(axes):
-    """目盛りの線を薄くし、線が 2 本以上ある図では凡例と線の右端の名前をつける。"""
+def finish_axes(axes, legend=True):
+    """目盛りの線を薄くし、線が 2 本以上ある図では凡例（legend=False なら付けない）と線の右端の名前をつける。"""
     for ax in axes:
         ax.grid(True, color="#e4e3df", linewidth=0.8)
         ax.set_axisbelow(True)
@@ -34,7 +34,8 @@ def finish_axes(axes):
         lines = ax.get_lines()
         if len(lines) < 2:
             continue
-        ax.legend(frameon=False)
+        if legend:
+            ax.legend(frameon=False)
         ends = []
         for line in lines:
             xs, ys = line.get_xdata(), line.get_ydata()
