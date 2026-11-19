@@ -1,6 +1,6 @@
 # はさみ将棋AI 学習担当マニュアル（11/12〜11/25）
 
-2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移した。続きからの学習、テストの数、第7章のリーグを足した）、11/17 更新（チェックリストを進み具合に合わせた。評価と攻略役を 7-7 の 1 つのコマンドにまとめた。リーグの図を 7-8 に足した。push の認証を個人のトークンにした。夕方、評価と攻略役の結果を 6-4 と 7-7 の表に書き込んだ）、本田
+2026-11-12 作成、11/16 更新（Claude Docs から GitHub へ移した。続きからの学習、テストの数、第7章のリーグを足した）、11/17 更新（チェックリストを進み具合に合わせた。評価と攻略役を 7-7 の 1 つのコマンドにまとめた。リーグの図を 7-8 に足した。push の認証を個人のトークンにした。夕方、評価と攻略役の結果を 6-4 と 7-7 の表に書き込んだ）、11/19 更新（攻略役で機械を鍛え直す 7-9 を足した）、本田
 
 このマニュアルの順に進めると、11/25 の発表に使う学習した AI と評価の表ができます。各章の最後にある「確認」ができたら、次の章へ進んでください。わからないところは、本田に連絡してください。コマンドは、GitHub で見ると各ブロックの右上のボタンでコピーできます。
 
@@ -58,6 +58,14 @@ flowchart LR
 - [x] 評価と攻略役の結果を main に入れる（PR）
 - [x] 速さ 1.3 と 0.7 の機械にも攻略役を当てる（7-7 の最後。11/17 夜）
 - [x] その結果を push し、7-7 の攻略役の表に書き足す
+
+### 11/19〜20（2 人、7-9）
+
+- [ ] 2 台とも最新を取り込む（`league.py` に `--fixed-human` が入った。wheel は変わっていない）
+- [ ] あなたの VM で、速さ 1.0 の鍛え直し・攻略役・評価を続けて回す（1 時間半ほど）
+- [ ] 本田の VM で、速さ 1.3 と 0.7 を続けて回す（3 時間ほど）
+- [ ] 結果を push する
+- [ ] 7-9 の表を埋め、鍛え直しで攻略役に取られる枚数が減ったかを確かめる
 
 ### 11/24 まで（2 人）
 
@@ -641,6 +649,70 @@ python python/train/plot_league.py runs/league_s07 runs/league_s10 runs/league_s
 
 図から読めること: B1 への勝率は 3 本とも下がらなかった。人間の主役への機械の勝率は、1.3 では 0.6〜0.9 で動き続け、0.7 では 0.15〜0.5 と人間の主役に負け越したまま終わった。1.0 だけが、1,400〜1,550 回目に 0.2 から 1.0 近くへ跳ね、過去の版への勝率も同じころ 0.98 まで上がった（7-7 の攻略役の結果を参照）。
 
+### 7-9 攻略役で鍛え直す（11/19〜20）
+
+7-7 の攻略役から、機械の弱点が 2 つわかりました。固定の相手で学習した機械は、守りに徹する人間を崩せません。リーグの機械は、攻め方を覚えた攻略役に負けます。どちらも、機械がそういう指し方の相手と一度も対局していないことが原因です。B1 は守りに徹しませんし、速さ 1.0 のリーグでは人間の主役が途中で崩れていました。
+
+そこで、7-7 で見つかった攻略役そのものを、機械の練習相手としてリーグに混ぜます。AlphaStar が攻略役（exploiter）をリーグに入れて、主役の弱点をふさいだのと同じ考え方です。`league.py` に、このための 2 つの設定を足しました。
+
+| 設定 | 意味 |
+| --- | --- |
+| `--fixed-human 攻略役の human.pt` | その人間を、ずっとプールに残る相手として入れる。何本でも並べられる。PFSP は過去の版と同じように選ぶ |
+| `--pfsp-window 200` | PFSP が、それぞれの相手との直近 200 局ほどだけで勝率を数える。機械が勝てるようになった相手は、だんだん選ばれなくなる |
+
+機械は、固定の相手で学習したもの（`b1_s10` など）から始めます。対局の半分は今までどおり B1 で、残りの 3 割を新しく学ぶ人間の主役（`--main-share 0.3`）、7 割を攻略役と人間の主役の過去の版にします。600 回の更新のあと、鍛え直した機械に一から攻略役を当て（7-7 と同じ 300 回）、B1・Race・Race3 でも評価します。ここまでを 1 つのコマンドで続けて回します。`log.csv` の最後の 3 列（`fixed_games`、`fixed_win`、`fixed_lost`）が、プールに入れた攻略役との局数、機械の勝率、取られた枚数です。
+
+始める前に、2 台とも 7-2 のとおり最新を取り込みます（下のコマンドの最初でも取り込みます）。止めていた VM は、ポータルで「開始」を押してからつなぎます。
+
+あなたの VM では速さ 1.0 を回します（1 時間半ほど）。
+
+```bash
+tmux new -s hard
+```
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull --no-edit origin main && mkdir -p runs/eval && \
+python python/train/league.py --init-machine runs/b1_s10/model.pt --speed-scale 1.0 --fixed-human runs/exploit_s10/human.pt --fixed-human runs/exploit_league/human.pt --fixed-human runs/exploit_read/human.pt --main-share 0.3 --pfsp-window 200 --updates 600 --threads 3 --out runs/hard_s10 && \
+python python/train/league.py --exploit runs/hard_s10/machine.pt --speed-scale 1.0 --updates 300 --threads 3 --out runs/exploit_hard_s10 && \
+python -u python/train/evaluate.py --model runs/hard_s10/machine.pt --speed-scale 1.0 --opponents b1,race,race3 | tee runs/eval/hard_s10.txt
+```
+
+本田の VM では、速さ 1.3 と 0.7 を続けて回します（3 時間ほど）。
+
+```bash
+tmux new -s hard
+```
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && git pull --no-edit origin main && mkdir -p runs/eval && \
+python python/train/league.py --init-machine runs/b1_s13/model.pt --speed-scale 1.3 --fixed-human runs/exploit_s13/human.pt --fixed-human runs/exploit_league_s13/human.pt --main-share 0.3 --pfsp-window 200 --updates 600 --threads 3 --out runs/hard_s13 && \
+python python/train/league.py --exploit runs/hard_s13/machine.pt --speed-scale 1.3 --updates 300 --threads 3 --out runs/exploit_hard_s13 && \
+python -u python/train/evaluate.py --model runs/hard_s13/machine.pt --speed-scale 1.3 --opponents b1,race,race3 | tee runs/eval/hard_s13.txt && \
+python python/train/league.py --init-machine runs/b1_s07/model.pt --speed-scale 0.7 --fixed-human runs/exploit_s07/human.pt --fixed-human runs/exploit_league_s07/human.pt --main-share 0.3 --pfsp-window 200 --updates 600 --threads 3 --out runs/hard_s07 && \
+python python/train/league.py --exploit runs/hard_s07/machine.pt --speed-scale 0.7 --updates 300 --threads 3 --out runs/exploit_hard_s07 && \
+python -u python/train/evaluate.py --model runs/hard_s07/machine.pt --speed-scale 0.7 --opponents b1,race,race3 | tee runs/eval/hard_s07.txt
+```
+
+進み具合は、`tail -n 1 runs/hard_s10/log.csv` などで見ます（左端が更新の回数で、600 で終わり）。終わったら push します。
+
+```bash
+git add runs/eval && bash tools/push_results.sh runs/hard_s10 runs/exploit_hard_s10
+```
+
+```bash
+git add runs/eval && bash tools/push_results.sh runs/hard_s13 runs/exploit_hard_s13 runs/hard_s07 runs/exploit_hard_s07
+```
+
+結果は次の表にまとめます。攻略役の列は 7-7 と同じく最後の 20 回の平均で、「前」は 7-7 の固定の相手で学習した機械の行です。鍛え直しがうまくいけば、新しい攻略役に取られる枚数が「前」より減り、B1・Race・Race3 への勝率は下がりません。
+
+| 速さ | 攻略役に対する機械の勝率（前 → 後） | 攻略役に取られた枚数（前 → 後） | B1 勝率（前 → 後） | Race 勝率（前 → 後） | Race3 勝率（前 → 後） |
+| --- | --- | --- | --- | --- | --- |
+| 1.0 | 26.9% → | 0.67 → | 96.5% → | 44.0% → | 18.5% → |
+| 1.3 | 8.1% → | 1.76 → | 99.0% → | 65.0% → | 73.5% → |
+| 0.7 | 11.9% → | 0.01 → | 92.5% → | 42.0% → | 36.0% → |
+
+うまくいく保証はありません。新しい攻略役は、600 回の練習で覚えた守り方のさらに裏をかいてくるかもしれません。そのときは、新しい攻略役もプールに足してもう 1 周回す（攻略役を見つける、プールに入れる、鍛え直す、をくり返す）のが次の手です。
+
 ## 困ったとき
 
 たいていのエラーは、Python 環境を有効にし忘れたか、実行した場所が違うかです。まず `cd ~/hasami-shogi && source ~/venv/bin/activate` を打ち直してから、下の表を見てください。
@@ -681,6 +753,8 @@ python python/train/plot_league.py runs/league_s07 runs/league_s10 runs/league_s
 | 評価（5 本）と攻略役（3 本） |  | 11/17 に済んだ（7-7） |
 | 0.7 のリーグの評価、リーグの図、結果を main に入れる PR | 11/17 に済んだ |  |
 | 速さ 1.3 と 0.7 の攻略役（4 本） | 11/17 夜に済んだ |  |
+| `league.py` の `--fixed-human` と `--pfsp-window`（7-9） | 作った |  |
+| 攻略役で鍛え直す（7-9、11/19〜20） | 1.3 と 0.7 を回す | 1.0 を回す |
 | 評価の表、対局の GIF（11/24 まで） | 0.7 の行を埋める | 表を埋め、GIF を作る |
 | スライド | 構成を確かめる | 下書きを作る |
 | 発表で話す分担 | 2 人で決める | 2 人で決める |
