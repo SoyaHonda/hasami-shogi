@@ -67,6 +67,7 @@ flowchart LR
 - [x] 本田の VM で、速さ 1.3 と 0.7 を続けて回し、push する（11/19、`results/aiexp-03`）
 - [x] 7-9 の表の 1.0 の行を埋める（取られる枚数は減ったが、攻略役への勝率は変わらなかった）
 - [ ] あなたの VM で、速さ 1.0 をもう 1 周回し、push する（7-10。1 時間 10 分ほど）
+- [ ] 本田の VM で、速さ 1.3 をもう 1 周回し、push する（7-10。1 時間ほど）
 - [x] 7-9 の表の 1.3・0.7 の行を埋める
 - [ ] 7-10 の表を埋める
 - [ ] `results/aiexp-03` と `results/aiexp-08` を main に入れる（PR）
@@ -725,11 +726,13 @@ git add runs/eval && bash tools/push_results.sh runs/hard_s13 runs/exploit_hard_
 
 機械は、プールに入れた攻略役の守りは崩せるようになりました（0.7 を除く）。崩せないのは、見たことのない新しい守り方です。練習相手の守り方の種類が足りないと考えられるので、新しい攻略役もプールに足してもう 1 周回します（7-10）。
 
-### 7-10 もう 1 周回す（11/19〜、あなたの VM）
+### 7-10 もう 1 周回す（11/19〜、2 台とも）
 
 7-9 の速さ 1.0 で見つかった新しい攻略役（`runs/exploit_hard_s10`）を 4 体目としてプールに足し、7-9 で鍛え直した機械（`runs/hard_s10/machine.pt`）から、もう一度同じことをします。攻略役を見つける、プールに入れる、鍛え直す、をくり返して、機械が経験する守り方の種類を増やすやり方です（AlphaStar もこれをくり返しています）。コードは変えていないので、最新を取り込む必要はありません。1 周は 1 時間 10 分ほどです（鍛え直し 61 分、攻略役 5 分、評価）。
 
-7-9 のコマンドが終わった tmux の中で、そのまま次を打ちます。tmux を閉じていたら、先に `tmux new -s hard` で開きます。
+あなたの VM では速さ 1.0、本田の VM では速さ 1.3 を回します。0.7 は、1 周目でプールの攻略役にさえ 31% しか勝てるようにならず、もう 1 周回しても変わる見込みが薄いので回しません。
+
+7-9 のコマンドが終わった tmux の中で、そのまま次を打ちます。tmux を閉じていたら、先に `tmux new -s hard` で開きます。あなたの VM（速さ 1.0）ではこうです。
 
 ```bash
 cd ~/hasami-shogi && source ~/venv/bin/activate && \
@@ -744,6 +747,21 @@ python -u python/train/evaluate.py --model runs/hard2_s10/machine.pt --speed-sca
 git add runs/eval && bash tools/push_results.sh runs/hard2_s10 runs/exploit_hard2_s10
 ```
 
+本田の VM（速さ 1.3）では、7-9 の 1.3 で見つかった新しい攻略役（`runs/exploit_hard_s13`）を 3 体目として足します。
+
+```bash
+cd ~/hasami-shogi && source ~/venv/bin/activate && \
+python python/train/league.py --init-machine runs/hard_s13/machine.pt --speed-scale 1.3 --fixed-human runs/exploit_s13/human.pt --fixed-human runs/exploit_league_s13/human.pt --fixed-human runs/exploit_hard_s13/human.pt --main-share 0.3 --pfsp-window 200 --updates 600 --threads 3 --out runs/hard2_s13 && \
+python python/train/league.py --exploit runs/hard2_s13/machine.pt --speed-scale 1.3 --updates 300 --threads 3 --out runs/exploit_hard2_s13 && \
+python -u python/train/evaluate.py --model runs/hard2_s13/machine.pt --speed-scale 1.3 --opponents b1,race,race3 | tee runs/eval/hard2_s13.txt
+```
+
+進み具合は `wc -l runs/hard2_s13/log.csv runs/exploit_hard2_s13/log.csv` で見ます。終わったら push します。
+
+```bash
+git add runs/eval && bash tools/push_results.sh runs/hard2_s13 runs/exploit_hard2_s13
+```
+
 結果は次の表にまとめます。見るのは、新しい攻略役に対する機械の勝率が、1 周ごとに上がっていくかどうかです。1 周分の差は揺れに埋もれるかもしれないので、何周か重ねて傾向を見ます。上がらなければ、引き分けの罰を重くするなど、報酬の付け方を直すことを考えます（C++ の変更と wheel の作り直しが要ります）。
 
 | 速さ 1.0 の機械 | プールの攻略役 | 新しい攻略役に対する機械の勝率 | 新しい攻略役に取られた枚数 | B1 勝率 | Race 勝率 | Race3 勝率 |
@@ -751,6 +769,14 @@ git add runs/eval && bash tools/push_results.sh runs/hard2_s10 runs/exploit_hard
 | 固定の相手（`b1_s10`） | なし | 26.9% | 0.67 | 96.5% | 44.0% | 18.5% |
 | 1 周目（`hard_s10`） | 3 体 | 28.5% | 0.27 | 96.5% | 36.0% | 19.5% |
 | 2 周目（`hard2_s10`） | 4 体 | | | | | |
+
+1.3 では、勝率に加えて、新しい攻略役に対する機械の勝率が半分を割るまでの更新の回数も見ます。1 周目でここが 50 回以内から 150 回すぎに延びました。
+
+| 速さ 1.3 の機械 | プールの攻略役 | 新しい攻略役に対する機械の勝率 | 半分を割るまでの更新 | 新しい攻略役に取られた枚数 | B1 勝率 | Race 勝率 | Race3 勝率 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 固定の相手（`b1_s13`） | なし | 8.1% | 50 回以内 | 1.76 | 99.0% | 65.0% | 73.5% |
+| 1 周目（`hard_s13`） | 2 体 | 9.8% | 150 回すぎ | 3.86 | 99.5% | 54.0% | 68.0% |
+| 2 周目（`hard2_s13`） | 3 体 | | | | | | |
 
 ## 困ったとき
 
