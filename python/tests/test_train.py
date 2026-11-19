@@ -161,6 +161,18 @@ def test_a_short_league_resumes_and_an_exploiter_runs(tmp_path, capsys):
     # The league's machine is a model.pt for evaluate.py.
     evaluate.main(["--model", os.path.join(out, "machine.pt"), "--opponents", "race3", "--games", "2"])
     assert "learned  race3" in capsys.readouterr().out
+    # A game against a learned human can be recorded, and the time per move measured.
+    pytest.importorskip("matplotlib")
+    import record_game
+    import time_inference
+
+    gif = str(tmp_path / "duel.gif")
+    record_game.main([os.path.join(out, "machine.pt"), "--human", os.path.join(out, "human.pt"), "--speedup", "60",
+                      "--out", gif])
+    assert os.path.getsize(gif) > 0
+    time_inference.main([os.path.join(out, "machine.pt"), "--positions", "20"])
+    printed = capsys.readouterr().out
+    assert "learned  median" in printed and "read     median" in printed
 
     for target in ("read", os.path.join(out, "machine.pt")):
         ex = str(tmp_path / ("ex_" + os.path.basename(target)))
