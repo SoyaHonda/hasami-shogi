@@ -1,0 +1,7 @@
+player   opponent  win     draw    taken  lost   outside
+read     b1         58.0%    0.0%   3.19   2.33   44.1%
+learned  b1         97.5%    0.0%   3.99   0.96   37.8%
+read     race       18.5%    0.5%   1.85   3.77   45.7%
+learned  race       33.0%    0.0%   2.54   3.60   35.9%
+read     race3      24.0%    0.0%   1.94   3.48   34.5%
+learned  race3      13.0%    0.0%   1.32   4.05   24.7%
