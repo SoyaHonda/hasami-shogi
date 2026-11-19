@@ -13,6 +13,11 @@ the machine beats x of the time is picked in proportion to (1 - x)^2, draws half
 machine learns from all its games; the human main learns from its games against the current
 machine. A snapshot of the human main joins the pool every --snapshot-every updates.
 
+--fixed-human adds frozen humans (e.g. the human.pt of an exploiter) to the pool for good: PFSP
+picks them like past versions, and they never leave the pool. With --pfsp-window N, PFSP weighs the
+last N or so games against each version (older results fade), so a version the machine has learned
+to beat stops being picked; without it, all games count alike.
+
 --exploit trains only a human, from scratch, against a fixed machine: a model.pt / machine.pt
 (acting as evaluate.py does, sampling its policy) or "read" (the hand-written read). It measures
 how much a learner aimed at that machine alone can take from it.
@@ -39,6 +44,7 @@ import hasami_env
 from model import Net
 
 MAIN = -1  # the opponent id of the human main in a DuelEnv slot
+FIXED = 100_000  # versions above this are the --fixed-human ones (pool/human_100001.pt and so on)
 HALF_LIFE_MS = 120_000
 LAM = 0.95
 
@@ -175,8 +181,9 @@ def ppo_update(net, opt, batch, dev, epochs, minibatch):
 class Pfsp:
     """The machine's results against each past human version, and the PFSP choice."""
 
-    def __init__(self, rng):
+    def __init__(self, rng, window=0):
         self.rng = rng
+        self.fade = 1.0 - 1.0 / window if window else 1.0  # each new game shrinks the old ones by this
         self.score = {}  # version -> [machine points (win 1, draw 0.5), games]
 
     def add_version(self, k):
@@ -187,8 +194,9 @@ class Pfsp:
 
     def record(self, k, winner):
         if k in self.score:
-            self.score[k][0] += 1.0 if winner == 2 else 0.5 if winner == 0 else 0.0
-            self.score[k][1] += 1
+            s = self.score[k]
+            s[0] = s[0] * self.fade + (1.0 if winner == 2 else 0.5 if winner == 0 else 0.0)
+            s[1] = s[1] * self.fade + 1
 
     def win_rate(self, k):
         pts, g = self.score[k]
@@ -219,6 +227,9 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--init-machine", help="model.pt to start the machine from (e.g. runs/b1_s10/model.pt)")
     p.add_argument("--init-human", help="human.pt to start the human from")
+    p.add_argument("--fixed-human", action="append", default=[],
+                   help="a human.pt (an exploiter's, say) to keep in the pool for good; repeat for more")
+    p.add_argument("--pfsp-window", type=int, default=0, help="PFSP weighs about the last N games of each version")
     p.add_argument("--exploit", help='train only a human against this machine: a model.pt, or "read"')
     p.add_argument("--resume", action="store_true")
     a = p.parse_args(argv)
@@ -259,7 +270,7 @@ def main(argv=None):
     decay = lambda u: max(0.0, 1 - u / a.updates)  # noqa: E731
     sched_m = torch.optim.lr_scheduler.LambdaLR(opt_m, decay)
     sched_h = torch.optim.lr_scheduler.LambdaLR(opt_h, decay)
-    pfsp = Pfsp(rng)
+    pfsp = Pfsp(rng, a.pfsp_window)
     pool = {}  # version (update number) -> frozen human Net
     if ckpt:
         machine.load_state_dict(ckpt["machine"])
@@ -269,6 +280,11 @@ def main(argv=None):
         sched_m.load_state_dict(ckpt["sched_m"])
         sched_h.load_state_dict(ckpt["sched_h"])
         pfsp.score = {int(k): list(v) for k, v in ckpt["pfsp"].items()}
+    elif not exploit:
+        for i, path in enumerate(a.fixed_human):
+            k = FIXED + i + 1
+            save_atomic(torch.load(path, map_location=dev), os.path.join(a.out, "pool", f"human_{k:05d}.pt"))
+            pfsp.add_version(k)
     for k in sorted(pfsp.score):
         net = Net(human=True).to(dev)
         net.load_state_dict(torch.load(os.path.join(a.out, "pool", f"human_{k:05d}.pt"), map_location=dev))
@@ -287,7 +303,8 @@ def main(argv=None):
 
     log_path = os.path.join(a.out, "log.csv")
     header = ["update", "machine_steps", "human_steps", "b1_games", "b1_win", "b1_lost", "main_games", "main_win",
-              "main_taken", "main_lost", "past_games", "past_win", "pool", "steps_per_s"]
+              "main_taken", "main_lost", "past_games", "past_win", "pool", "steps_per_s",
+              "fixed_games", "fixed_win", "fixed_lost"]  # fixed_*: the --fixed-human games, also counted in past_*
     rows = []
     if ckpt and os.path.exists(log_path):
         with open(log_path, newline="") as f:
@@ -300,9 +317,12 @@ def main(argv=None):
     if env_b is not None:
         ob, sb, mb = env_b.reset()
     od, sd, md, side = env_d.reset()
+    if pool and not exploit:  # with fixed humans from the start, the first games are drawn as later ones
+        opp[:] = [MAIN if rng.random() < a.main_share else pfsp.pick() for _ in range(a.duel_envs)]
     for u in range(start, a.updates):
         t0 = time.time()
-        st = dict(b1_g=0, b1_w=0, b1_l=0, main_g=0, main_w=0, main_t=0, main_l=0, past_g=0, past_w=0, m=0, h=0)
+        st = dict(b1_g=0, b1_w=0, b1_l=0, main_g=0, main_w=0, main_t=0, main_l=0, past_g=0, past_w=0,
+                  fix_g=0, fix_w=0, fix_l=0, m=0, h=0)
         for _ in range(a.rollout):
             # 1) Against B1: every slot is at a machine decision point.
             if env_b is not None:
@@ -356,6 +376,10 @@ def main(argv=None):
                     else:
                         st["past_g"] += 1
                         st["past_w"] += int(w == 2)
+                        if opp[i] > FIXED:
+                            st["fix_g"] += 1
+                            st["fix_w"] += int(w == 2)
+                            st["fix_l"] += int(info["captures"][i, 1])
                         pfsp.record(int(opp[i]), w)
                     if not exploit:
                         opp[i] = MAIN if (not pool or rng.random() < a.main_share) else pfsp.pick()
@@ -385,8 +409,8 @@ def main(argv=None):
             net.eval()
             pool[k] = net
             pfsp.add_version(k)
-            while len(pool) > a.pool_size:
-                old = min(pool)
+            while len([v for v in pool if v < FIXED]) > a.pool_size:
+                old = min(pool)  # the oldest snapshot (the fixed humans sort after every snapshot)
                 del pool[old]
                 pfsp.drop_version(old)
                 opp[opp == old] = MAIN  # its running games finish against the main
@@ -397,12 +421,12 @@ def main(argv=None):
         row = [u + 1, st["m"], st["h"], st["b1_g"], st["b1_w"] / g(st["b1_g"]), st["b1_l"] / g(st["b1_g"]),
                st["main_g"], st["main_w"] / g(st["main_g"]), st["main_t"] / g(st["main_g"]),
                st["main_l"] / g(st["main_g"]), st["past_g"], st["past_w"] / g(st["past_g"]), len(pool),
-               (st["m"] + st["h"]) * rate]
+               (st["m"] + st["h"]) * rate, st["fix_g"], st["fix_w"] / g(st["fix_g"]), st["fix_l"] / g(st["fix_g"])]
         log.writerow(row)
         log_file.flush()
         print(f"update {u + 1}/{a.updates}  b1 win {row[4]:.3f} ({st['b1_g']})  main win {row[7]:.3f} "
               f"taken {row[8]:.2f} lost {row[9]:.2f} ({st['main_g']})  past win {row[11]:.3f} ({st['past_g']})  "
-              f"pool {len(pool)}  {row[-1]:.0f} steps/s", flush=True)
+              f"pool {len(pool)}  {row[13]:.0f} steps/s", flush=True)
         if (u + 1) % 50 == 0 or u + 1 == a.updates:
             save_atomic(machine.state_dict(), os.path.join(a.out, "machine.pt"))
             save_atomic(human.state_dict(), os.path.join(a.out, "human.pt"))
