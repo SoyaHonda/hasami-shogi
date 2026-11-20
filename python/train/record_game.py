@@ -4,6 +4,8 @@
     python python/train/record_game.py runs/hard_s10/machine.pt --human runs/exploit_hard_s10/human.pt --out runs/turtle.gif
 
 黒が機械の駒、白が人間の駒、点線の丸が人間が持ち上げている駒の元のマス、x が機械のヘッド（駒を動かす磁石）。
+黄色の輪は 40 秒動いていない駒で、相手の駒が上下左右の隣に来るだけで取られる（正式ルールの RU40）。
+決定点の盤を並べるので、決定点のあいだに起きたこと（人間が置いてすぐ取られた駒など）は映らない。
 文字は日本語なので、日本語のフォント（IPAGothic など）がないと四角に化ける（クラウドの開発環境にはある）。
 --human を付けると、人間側をボットではなく学習した人間（リーグの human.pt や攻略役）にする。
 盤は対局の時計で --speedup 倍の速さに並べ直す（既定は 4 倍。1 コマが 1 秒）。最後のコマは終わった局の結果。
@@ -51,7 +53,10 @@ def snapshot(obs, scal, side):
     lifted = o[2] if side == 0 else np.zeros_like(o[2])
     caps = (int(scal[0, 0]), int(scal[0, 1])) if side == 0 else (int(scal[0, 1]), int(scal[0, 0]))
     clock = LIMIT_MS - int(scal[0, 2]) * 100
-    return clock, dict(machine=machine.copy(), human=human.copy(), lifted=lifted.copy(), head=o[9].copy(), caps=caps)
+    # 面 7・8 は機械と人間の駒が RU（40 秒動かさないと、隣に来られただけで取られる）になるまでの残り。どちらの見方でも同じ。
+    stale = (machine > 0) & (o[7] == 0) | (human > 0) & (o[8] == 0)
+    return clock, dict(machine=machine.copy(), human=human.copy(), lifted=lifted.copy(), head=o[9].copy(), caps=caps,
+                       stale=stale)
 
 
 def play(a):
@@ -99,11 +104,14 @@ def main(argv=None):
         while j + 1 < len(shots) and shots[j + 1][0] <= k * step_ms:
             j += 1
         frames.append((k * step_ms, shots[j][1]))
-    last = dict(shots[-1][1], caps=tuple(caps), lifted=np.zeros_like(shots[-1][1]["lifted"]))
+    last = dict(shots[-1][1], caps=tuple(caps), lifted=np.zeros_like(shots[-1][1]["lifted"]),
+                stale=np.zeros_like(shots[-1][1]["stale"]))
     frames += [(end_ms, last)] * (2 * FPS)  # 結果を 2 秒見せる
     print(WINNER[winner], "captures", caps, f"{end_ms / 1000:.0f} s", "frames", len(frames))
 
-    fig, ax = plt.subplots(figsize=(4.3, 4.6))
+    fig, ax = plt.subplots(figsize=(4.3, 4.8))
+    fig.text(0.53, 0.015, "黄色の輪：40 秒動いていない駒（上下左右の隣に来られるだけで取られる）", ha="center", va="bottom",
+             fontsize=7.5, color="#5f5e5a")
 
     def draw(k):
         t, s = frames[k]
@@ -122,6 +130,8 @@ def main(argv=None):
                     ax.add_patch(plt.Circle((c, r), 0.38, color="#26251f"))
                 if s["human"][r, c]:
                     ax.add_patch(plt.Circle((c, r), 0.38, facecolor="#fbf8f0", edgecolor="#26251f", lw=1.2))
+                if s["stale"][r, c]:
+                    ax.add_patch(plt.Circle((c, r), 0.45, fill=False, edgecolor="#eda100", lw=3))
                 if s["lifted"][r, c]:
                     ax.add_patch(plt.Circle((c, r), 0.38, fill=False, edgecolor="#26251f", ls="--", lw=1.2))
                 if s["head"][r, c]:
@@ -136,7 +146,7 @@ def main(argv=None):
         ax.text(-0.75, 0, "機械の側", ha="right", va="top", rotation=90, fontsize=9, color="#5f5e5a")
         ax.text(-0.75, 6, "人間の側", ha="right", va="bottom", rotation=90, fontsize=9, color="#5f5e5a")
 
-    fig.subplots_adjust(left=0.09, right=0.97, bottom=0.03, top=0.85)
+    fig.subplots_adjust(left=0.09, right=0.97, bottom=0.06, top=0.86)
     FuncAnimation(fig, draw, frames=len(frames)).save(a.out, writer=PillowWriter(fps=FPS))
     print("wrote", a.out)
     return a.out
