@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 860" width="1060" height="860" font-family="'Hiragino Sans','Yu Gothic UI','Meiryo','Noto Sans JP',sans-serif">
+<rect width="1060" height="860" fill="#ffffff"/>
+<text x="24.0" y="34.0" font-size="18" text-anchor="start" font-weight="bold" fill="#1b231f" >ESP32-DevKitC-32E のピン（上から見た図。アンテナが上、USB が下）</text>
+<text x="24.0" y="56.0" font-size="12.5" text-anchor="start" font-weight="normal" fill="#5a6760" >ピンの名前は基板の白い文字のとおり。色を付けた 7 本に、オス-メスのジャンパーを 1 本ずつつなぐ</text>
+<rect x="370" y="150" width="260" height="654" rx="8" fill="#1e2226"/>
+<rect x="420" y="106" width="160" height="60" rx="3" fill="#2b2f33"/>
+<text x="500.0" y="130.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#c9ced2" >アンテナ</text>
+<rect x="445" y="160" width="110" height="190" rx="4" fill="#c4c9cc"/>
+<text x="500.0" y="260.0" font-size="15" text-anchor="middle" font-weight="bold" fill="#3a4045" >ESP32-E</text>
+<rect x="476.0" y="778" width="48" height="36" rx="3" fill="#b9bec2" stroke="#7d848a"/>
+<text x="500.0" y="834.0" font-size="12.5" text-anchor="middle" font-weight="normal" fill="#5a6760" >Micro USB（PC へ）</text>
+<rect x="408" y="746" width="28" height="28" rx="4" fill="#9aa1a6"/><circle cx="422" cy="760" r="8" fill="#2b2f33"/>
+<text x="422.0" y="738.0" font-size="12" text-anchor="middle" font-weight="bold" fill="#e8ebe9" >EN</text>
+<rect x="564" y="746" width="28" height="28" rx="4" fill="#9aa1a6"/><circle cx="578" cy="760" r="8" fill="#2b2f33"/>
+<text x="578.0" y="738.0" font-size="12" text-anchor="middle" font-weight="bold" fill="#e8ebe9" >Boot</text>
+<text x="360.0" y="764.0" font-size="12" text-anchor="end" font-weight="normal" fill="#5a6760" >EN ボタン（押すと再起動）</text>
+<text x="640.0" y="764.0" font-size="12" text-anchor="start" font-weight="normal" fill="#5a6760" >Boot ボタン（書き込みが進まないとき押す）</text>
+<circle cx="386" cy="190" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<circle cx="386" cy="190" r="11" fill="none" stroke="#9a7d0a" stroke-width="3"/>
+<text x="404.0" y="194.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >3V3</text>
+<path d="M375 190 H340" stroke="#9a7d0a" stroke-width="2"/>
+<text x="332.0" y="191.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#9a7d0a" >→ 右 22（3.3V の行）</text>
+<text x="332.0" y="208.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 3 番</text>
+<circle cx="386" cy="218" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="222.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >EN</text>
+<circle cx="386" cy="246" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<circle cx="386" cy="246" r="11" fill="none" stroke="#1f5fbf" stroke-width="3"/>
+<text x="404.0" y="250.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >VP</text>
+<path d="M375 246 H340" stroke="#1f5fbf" stroke-width="2"/>
+<text x="332.0" y="247.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#1f5fbf" >→ 右 27（センサー OUT の行）</text>
+<text x="332.0" y="264.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 26 番。VP は GPIO36</text>
+<circle cx="386" cy="274" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="278.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >VN</text>
+<circle cx="386" cy="302" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="306.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >34</text>
+<circle cx="386" cy="330" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="334.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >35</text>
+<circle cx="386" cy="358" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="362.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >32</text>
+<circle cx="386" cy="386" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="390.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >33</text>
+<circle cx="386" cy="414" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="418.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >25</text>
+<circle cx="386" cy="442" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="446.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >26</text>
+<circle cx="386" cy="470" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="474.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >27</text>
+<circle cx="386" cy="498" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="502.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >14</text>
+<circle cx="386" cy="526" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="530.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >12</text>
+<circle cx="386" cy="554" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<circle cx="386" cy="554" r="11" fill="none" stroke="#ffffff" stroke-width="3"/>
+<text x="404.0" y="558.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >GND</text>
+<path d="M375 554 H340" stroke="#1b231f" stroke-width="2"/>
+<text x="332.0" y="555.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#1b231f" >→ GND の電源ライン（表の 1 番）</text>
+<text x="332.0" y="572.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" ></text>
+<circle cx="386" cy="582" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<circle cx="386" cy="582" r="11" fill="none" stroke="#1f5fbf" stroke-width="3"/>
+<text x="404.0" y="586.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >13</text>
+<path d="M375 582 H340" stroke="#1f5fbf" stroke-width="2"/>
+<text x="332.0" y="583.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#1f5fbf" >→ 左 2（74AHCT125 の 1A）</text>
+<text x="332.0" y="600.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 10 番。LED の信号</text>
+<circle cx="386" cy="610" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="614.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >D2</text>
+<circle cx="386" cy="638" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="642.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >D3</text>
+<circle cx="386" cy="666" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="404.0" y="670.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >CMD</text>
+<circle cx="386" cy="694" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<circle cx="386" cy="694" r="11" fill="none" stroke="#d35400" stroke-width="3"/>
+<text x="404.0" y="698.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >5V</text>
+<path d="M375 694 H340" stroke="#d35400" stroke-width="2"/>
+<text x="332.0" y="695.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#d35400" >→ 5V の電源ライン</text>
+<text x="332.0" y="712.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 2 番</text>
+<circle cx="614" cy="190" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="194.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >GND</text>
+<circle cx="614" cy="218" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="222.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >23</text>
+<circle cx="614" cy="246" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="250.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >22</text>
+<circle cx="614" cy="274" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="278.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >TX</text>
+<circle cx="614" cy="302" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="306.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >RX</text>
+<circle cx="614" cy="330" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="334.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >21</text>
+<circle cx="614" cy="358" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="362.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >GND</text>
+<circle cx="614" cy="386" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="390.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >19</text>
+<circle cx="614" cy="414" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<circle cx="614" cy="414" r="11" fill="none" stroke="#1f5fbf" stroke-width="3"/>
+<text x="596.0" y="418.5" font-size="12.5" text-anchor="end" font-weight="bold" fill="#ffffff" >18</text>
+<path d="M625 414 H660" stroke="#1f5fbf" stroke-width="2"/>
+<text x="668.0" y="415.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f5fbf" >→ 左 13（TB67H450 の IN1）</text>
+<text x="668.0" y="432.0" font-size="11.5" text-anchor="start" font-weight="normal" fill="#5a6760" >表の 17 番</text>
+<circle cx="614" cy="442" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="446.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >5</text>
+<circle cx="614" cy="470" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="474.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >17</text>
+<circle cx="614" cy="498" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="502.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >16</text>
+<circle cx="614" cy="526" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<circle cx="614" cy="526" r="11" fill="none" stroke="#1f5fbf" stroke-width="3"/>
+<text x="596.0" y="530.5" font-size="12.5" text-anchor="end" font-weight="bold" fill="#ffffff" >4</text>
+<path d="M625 526 H660" stroke="#1f5fbf" stroke-width="2"/>
+<text x="668.0" y="527.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f5fbf" >→ 左 12（TB67H450 の IN2）</text>
+<text x="668.0" y="544.0" font-size="11.5" text-anchor="start" font-weight="normal" fill="#5a6760" >表の 18 番</text>
+<circle cx="614" cy="554" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="558.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >0</text>
+<circle cx="614" cy="582" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="586.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >2</text>
+<circle cx="614" cy="610" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="614.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >15</text>
+<circle cx="614" cy="638" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="642.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >D1</text>
+<circle cx="614" cy="666" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="670.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >D0</text>
+<circle cx="614" cy="694" r="7" fill="#d4c06a" stroke="#7d6608"/>
+<text x="596.0" y="698.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >CLK</text>
+<text x="668.0" y="194.0" font-size="11.5" text-anchor="start" font-weight="normal" fill="#5a6760" >GND はどれも同じ。左の GND の代わりに使ってもよい</text>
+</svg>
