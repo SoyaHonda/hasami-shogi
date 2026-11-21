@@ -115,8 +115,8 @@ ESP32 に測定用のプログラム（rig ファーム）を書き込みます�
 
 1. Visual Studio Code（VS Code）を公式サイトから入れる。
 2. VS Code の左の「拡張機能」（四角が 4 つのアイコン）で「PlatformIO IDE」を検索して入れる。入り終わると、左に蟻の顔のアイコンが出る。初回は準備に数分かかる。
-3. GitHub のリポジトリ（SoyaHonda/hasami-shogi）を開き、ブランチが main になっているか確かめる。「Code」→「Download ZIP」を押して ZIP を落とし、展開する。前に落とした ZIP があっても、更新されていることがあるので落とし直す。
-4. VS Code の「ファイル」→「フォルダーを開く」で、展開したフォルダーのうち `platformio.ini` が入っている階層を開く。
+3. リポジトリ（SoyaHonda/hasami-shogi）を手元で最新にする。clone してあれば、リポジトリのフォルダーで `git pull origin main` を打つ。まだなければ `git clone https://github.com/SoyaHonda/hasami-shogi.git` で取ってくる。
+4. VS Code の「ファイル」→「フォルダーを開く」で、リポジトリのフォルダー（いちばん上の階層。`platformio.ini` はここにある）を開く。
 
 ESP32 を PC につなぎます。
 
@@ -356,7 +356,7 @@ LED を確かめます。
 ### A9 実験室に行く日の準備
 
 1. 装置予約システムで、3D プリンター H800（PLA）と H+1（ABS、台車だけに使う）、レーザーカッターを同じ日に予約する。実験室のレーザーカッターは CO2 レーザーの機種で、アクリルの切断は使用例に載っている（確認済み）。
-2. GitHub のリポジトリの `hardware/rig/stl/` にある 7 つの STL と、`hardware/rig/laser/acrylic.svg`、`acrylic.dxf` を USB メモリに入れる。これらは A2 で落とした ZIP に入っている。
+2. GitHub のリポジトリの `hardware/rig/stl/` にある 7 つの STL と、`hardware/rig/laser/acrylic.svg`、`acrylic.dxf` を USB メモリに入れる。どれも A2 で最新にしたリポジトリのフォルダーに入っている。
 3. 下のリストの持ち物をそろえる。B3 で、部品が格子板の窓や受け皿に入るかをその場で確かめるために使う。
 
 持ち物です。
