@@ -20,7 +20,7 @@
 <text x="404.0" y="194.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >3V3</text>
 <path d="M375 190 H340" stroke="#9a7d0a" stroke-width="2"/>
 <text x="332.0" y="191.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#9a7d0a" >→ 下 22（3.3V の列）</text>
-<text x="332.0" y="208.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 3 番</text>
+<text x="332.0" y="208.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 25 番</text>
 <circle cx="386" cy="218" r="7" fill="#d4c06a" stroke="#7d6608"/>
 <text x="404.0" y="222.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >EN</text>
 <circle cx="386" cy="246" r="7" fill="#d4c06a" stroke="#7d6608"/>
@@ -28,7 +28,7 @@
 <text x="404.0" y="250.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >VP</text>
 <path d="M375 246 H340" stroke="#1f5fbf" stroke-width="2"/>
 <text x="332.0" y="247.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#1f5fbf" >→ 下 19（センサー OUT の列）</text>
-<text x="332.0" y="264.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 26 番。VP は GPIO36</text>
+<text x="332.0" y="264.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 29 番。VP は GPIO36</text>
 <circle cx="386" cy="274" r="7" fill="#d4c06a" stroke="#7d6608"/>
 <text x="404.0" y="278.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >VN</text>
 <circle cx="386" cy="302" r="7" fill="#d4c06a" stroke="#7d6608"/>
@@ -53,14 +53,14 @@
 <circle cx="386" cy="554" r="11" fill="none" stroke="#ffffff" stroke-width="3"/>
 <text x="404.0" y="558.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >GND</text>
 <path d="M375 554 H340" stroke="#1b231f" stroke-width="2"/>
-<text x="332.0" y="555.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#1b231f" >→ GND（−の列、表の 1 番）</text>
+<text x="332.0" y="555.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#1b231f" >→ GND（−のライン、表の 23 番）</text>
 <text x="332.0" y="572.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" ></text>
 <circle cx="386" cy="582" r="7" fill="#d4c06a" stroke="#7d6608"/>
 <circle cx="386" cy="582" r="11" fill="none" stroke="#1f5fbf" stroke-width="3"/>
 <text x="404.0" y="586.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >13</text>
 <path d="M375 582 H340" stroke="#1f5fbf" stroke-width="2"/>
 <text x="332.0" y="583.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#1f5fbf" >→ 下 2（74AHCT125 の 1A）</text>
-<text x="332.0" y="600.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 10 番。LED の信号</text>
+<text x="332.0" y="600.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 26 番。LED の信号</text>
 <circle cx="386" cy="610" r="7" fill="#d4c06a" stroke="#7d6608"/>
 <text x="404.0" y="614.5" font-size="12.5" text-anchor="start" font-weight="normal" fill="#aab2b7" >D2</text>
 <circle cx="386" cy="638" r="7" fill="#d4c06a" stroke="#7d6608"/>
@@ -71,8 +71,8 @@
 <circle cx="386" cy="694" r="11" fill="none" stroke="#d35400" stroke-width="3"/>
 <text x="404.0" y="698.5" font-size="12.5" text-anchor="start" font-weight="bold" fill="#ffffff" >5V</text>
 <path d="M375 694 H340" stroke="#d35400" stroke-width="2"/>
-<text x="332.0" y="695.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#d35400" >→ 5V（＋の列）</text>
-<text x="332.0" y="712.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 2 番</text>
+<text x="332.0" y="695.0" font-size="13.5" text-anchor="end" font-weight="bold" fill="#d35400" >→ 5V（＋のライン）</text>
+<text x="332.0" y="712.0" font-size="11.5" text-anchor="end" font-weight="normal" fill="#5a6760" >表の 24 番</text>
 <circle cx="614" cy="190" r="7" fill="#d4c06a" stroke="#7d6608"/>
 <text x="596.0" y="194.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >GND</text>
 <circle cx="614" cy="218" r="7" fill="#d4c06a" stroke="#7d6608"/>
@@ -94,7 +94,7 @@
 <text x="596.0" y="418.5" font-size="12.5" text-anchor="end" font-weight="bold" fill="#ffffff" >18</text>
 <path d="M625 414 H660" stroke="#1f5fbf" stroke-width="2"/>
 <text x="668.0" y="415.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f5fbf" >→ 上 13（TB67H450 の IN1）</text>
-<text x="668.0" y="432.0" font-size="11.5" text-anchor="start" font-weight="normal" fill="#5a6760" >表の 17 番</text>
+<text x="668.0" y="432.0" font-size="11.5" text-anchor="start" font-weight="normal" fill="#5a6760" >表の 27 番</text>
 <circle cx="614" cy="442" r="7" fill="#d4c06a" stroke="#7d6608"/>
 <text x="596.0" y="446.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >5</text>
 <circle cx="614" cy="470" r="7" fill="#d4c06a" stroke="#7d6608"/>
@@ -106,7 +106,7 @@
 <text x="596.0" y="530.5" font-size="12.5" text-anchor="end" font-weight="bold" fill="#ffffff" >4</text>
 <path d="M625 526 H660" stroke="#1f5fbf" stroke-width="2"/>
 <text x="668.0" y="527.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f5fbf" >→ 上 12（TB67H450 の IN2）</text>
-<text x="668.0" y="544.0" font-size="11.5" text-anchor="start" font-weight="normal" fill="#5a6760" >表の 18 番</text>
+<text x="668.0" y="544.0" font-size="11.5" text-anchor="start" font-weight="normal" fill="#5a6760" >表の 28 番</text>
 <circle cx="614" cy="554" r="7" fill="#d4c06a" stroke="#7d6608"/>
 <text x="596.0" y="558.5" font-size="12.5" text-anchor="end" font-weight="normal" fill="#aab2b7" >0</text>
 <circle cx="614" cy="582" r="7" fill="#d4c06a" stroke="#7d6608"/>
