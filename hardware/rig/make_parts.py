@@ -9,7 +9,7 @@ electromagnet, the sensor at the square's centre and the LED 8 off it. Change th
 the first block and run the script again.
 
 Stack (z up, from the desk): frame floor 3, sled ledge 7, electromagnet 20 (ZYE1-P25/20), gap 2,
-grid 3, acrylic 2, then the piece's magnets flush with its bottom. Magnet to electromagnet: 7.
+grid 3, acrylic 2, then the piece's floor 0.6 under its magnets. Magnet to electromagnet: 7.6.
 Every height comes from the printed parts, so no measuring is needed. Clearances are generous
 (0.3 to 1.0 mm) because the sizes come from datasheets, not from measured parts. No M3 parts:
 the electromagnet is held by an M4 screw into its back from below the sled, and the frame can be
@@ -47,23 +47,28 @@ LED_SLOT_W = 5.0                  # its three wires run up the right of the sens
 LED_SLOT_X0 = SENSOR_SLOT_W / 2 + 2.5  # sensor's slot past it: every wire leaves by the +y edge
 PEG_X, PEG_D, PEG_H = 55.0, 3.0, 2.0  # pegs on the walls locate the grid plate
 JIG_SLOT_SHIFT = 3.6              # the identification test's offset
-# Pieces are shogi-piece pentagons the size of a real fuhyo (27 long, 22.5 wide), tip towards
-# +y; the magnets sit at the centre of the outline's bounding box.
+# Pieces are shogi-piece pentagons the size of a real fuhyo (27 long, 22.5 wide, 7.75 thick), tip
+# towards +y, in two halves of the same outline pressed together: a translucent lower half (the
+# light shows as a band round its side) and an opaque upper half with the character. The magnets
+# sit in a closed chamber at the centre of the outline's bounding box, on a floor 0.6 thick.
 PIECE_W, PIECE_SHOULDER_W = 22.5, 20.0  # width at the bottom edge, at the shoulders
 PIECE_SHOULDER, PIECE_L = 20.0, 27.0    # from the bottom edge to the shoulders, to the tip
-PIECE_RING = 2.0                  # the translucent base shows this far round the body (light ring)
-PIECE_BASE_H = 6.0
-PIECE_BODY_H = 3.3                # 0.8 of it in the base's recess: the piece stands 8.5 tall
+PIECE_H = 7.75
+PIECE_SPLIT = 4.0                 # height of the lower half
+PIECE_FLOOR = 0.6                 # under the magnets: two 0.3 layers
+TONGUE_H, TONGUE_WALL = 1.0, 1.2  # the upper half's tongue drops into the lower half's recess
+PIECE_FIT = 0.1                   # clearance per side round the tongue: smaller is tighter
+SEAM_CHAMFER = 0.4                # V-groove at the seam, for prying the halves apart
 # The character engraved in the body's top, to be filled with paint: 歩 for the human's pieces,
 # と for the machine's (the back of a fuhyo). Noto Sans JP is under the SIL Open Font License;
 # a bold sans keeps every stroke wider than the printer's nozzle.
 PIECE_LABELS = {"fu": "歩", "to": "と"}
 LABEL_FONT = os.environ.get("LABEL_FONT", "C:/Windows/Fonts/NotoSansJP-VF.ttf")
 LABEL_WEIGHT = 700
-LABEL_H = 11.0                    # em size; the glyph itself is a little smaller
+LABEL_H = 13.0                    # em size; the glyph itself is a little smaller
 LABEL_Y = -1.5                    # centre of the em square, below the outline's centre
 LABEL_DEPTH = 0.9                 # three 0.3 layers
-POCKET_D, POCKET_H = 10.3, 4.2    # two 10 x 2 magnets
+POCKET_D, POCKET_H = 10.3, 4.2    # two 10 x 2 magnets; 3.4 of it in the lower half, 0.8 in the upper
 SPACER_D = 9.8
 ACRYLIC_L, ACRYLIC_W = GRID_L - 2.0, GRID_W - 2.0  # 118 x 43: inside the jig's skirt with room
 SEG = 96
@@ -176,12 +181,20 @@ def piece_outline(inset=0.0):
     return cs.offset(-inset, mf.JoinType.Miter) if inset else cs
 
 
+def chamfered(z0, z1, c, top=True):
+    """The piece outline from z0 to z1, its top (or bottom) edge chamfered by c."""
+    a, b = (z0, z1 - c) if top else (z0 + c, z1)
+    body = piece_outline().extrude(b - a).translate([0, 0, a])
+    edge = piece_outline(c).extrude(0.01).translate([0, 0, z1 - 0.01 if top else z0])
+    return mf.Manifold.batch_hull([body, edge])
+
+
 def piece_base():
-    """Translucent base (light ring). Magnets go in from the bottom, flush with it; the body
-    sits in a 0.8 recess on top."""
-    part = piece_outline().extrude(PIECE_BASE_H)
-    part -= cyl(0, 0, -1, POCKET_H, POCKET_D)
-    part -= piece_outline(PIECE_RING - 0.2).extrude(1.8).translate([0, 0, PIECE_BASE_H - 0.8])
+    """Translucent lower half. The magnets drop into the chamber from above, onto its floor; the
+    upper half's tongue presses into the recess round the chamber's mouth."""
+    part = chamfered(0, PIECE_SPLIT, SEAM_CHAMFER)
+    part -= piece_outline(TONGUE_WALL).extrude(TONGUE_H + 1).translate([0, 0, PIECE_SPLIT - TONGUE_H])
+    part -= cyl(0, 0, PIECE_FLOOR, PIECE_SPLIT + 1, POCKET_D)
     return part
 
 
@@ -243,18 +256,20 @@ def label(ch):
 
 
 def piece_body(ch):
-    """Opaque body (human: natural or white, machine: black), set in the base's recess; the top
-    edge is chamfered 0.6 and the character is engraved LABEL_DEPTH into it."""
-    lower = piece_outline(PIECE_RING).extrude(PIECE_BODY_H - 0.6)
-    top = piece_outline(PIECE_RING + 0.6).extrude(0.01).translate([0, 0, PIECE_BODY_H - 0.01])
-    part = mf.Manifold.batch_hull([lower, top])
+    """Opaque upper half (human: natural or white, machine: black), modelled where it sits on the
+    lower half: a tongue below that presses into the lower half's recess and caps the magnet
+    chamber, the top edge chamfered 0.6 and the character engraved LABEL_DEPTH into the top.
+    Printed upside down, the engraved face on the bed."""
+    part = chamfered(PIECE_SPLIT, PIECE_H, 0.6)
+    part += piece_outline(TONGUE_WALL + PIECE_FIT).extrude(TONGUE_H + 0.01).translate([0, 0, PIECE_SPLIT - TONGUE_H])
+    part -= cyl(0, 0, PIECE_SPLIT - TONGUE_H - 1, PIECE_FLOOR + POCKET_H, POCKET_D)
     mark = label(ch)
-    assert (mark - piece_outline(PIECE_RING + 0.8)).is_empty(), f"{ch} runs into the chamfer"
-    return part - mark.extrude(LABEL_DEPTH + 1).translate([0, 0, PIECE_BODY_H - LABEL_DEPTH])
+    assert (mark - piece_outline(1.2)).is_empty(), f"{ch} runs into the chamfer"
+    return part - mark.extrude(LABEL_DEPTH + 1).translate([0, 0, PIECE_H - LABEL_DEPTH])
 
 
 def spacer():
-    """Fills the pocket above a single magnet, so that it stays flush with the bottom."""
+    """Fills the chamber above a single magnet, so that it stays on the floor."""
     return cyl(0, 0, 0, 2.0, SPACER_D)
 
 
@@ -270,8 +285,9 @@ PARTS = {
 }
 
 
-# Printed upside down (the jig's skirt points up, so nothing needs support).
-UPSIDE_DOWN = {"jig"}
+# Printed upside down (the jig's skirt and the upper halves' tongues point up, so nothing needs
+# support; the engraved faces lie on the bed).
+UPSIDE_DOWN = {"jig", "piece_body_fu", "piece_body_to"}
 
 
 def write_acrylic(out):
@@ -318,7 +334,7 @@ def main():
         print(f"{name:11s} {ext[0]:6.1f} x {ext[1]:6.1f} x {ext[2]:5.1f} mm  {t.volume / 1000:6.1f} cm3  -> {os.path.relpath(path)}")
     write_acrylic(os.path.join(os.path.dirname(os.path.abspath(__file__)), "laser"))
     print(f"grid bottom (wall top) at z = {WALL_TOP:.1f} mm; magnet to electromagnet = "
-          f"{WALL_TOP + GRID_T + ACRYLIC_T - (FLOOR_T + SLED_LEDGE + MAGNET_H):.1f} mm")
+          f"{WALL_TOP + GRID_T + ACRYLIC_T + PIECE_FLOOR - (FLOOR_T + SLED_LEDGE + MAGNET_H):.1f} mm")
 
 
 if __name__ == "__main__":
