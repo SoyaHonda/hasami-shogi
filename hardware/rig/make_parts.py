@@ -1,6 +1,6 @@
 """Printable parts of the one-square prototype, stage 1 (hand-moved sled, no motor yet).
 
-    pip install manifold3d trimesh numpy
+    pip install manifold3d trimesh numpy fonttools
     python hardware/rig/make_parts.py          # writes hardware/rig/stl/*.stl
 
 All sizes are in mm and come from the build plan (plans/2026-10-30_realtime-hasami-board.md): a
@@ -21,6 +21,9 @@ import os
 import manifold3d as mf
 import numpy as np
 import trimesh
+from fontTools.pens.basePen import BasePen
+from fontTools.ttLib import TTFont
+from fontTools.varLib.instancer import instantiateVariableFont
 
 # ---- Sizes (mm). ----
 SQUARE = 33.3
@@ -44,9 +47,23 @@ LED_SLOT_W = 5.0                  # its three wires run up the right of the sens
 LED_SLOT_X0 = SENSOR_SLOT_W / 2 + 2.5  # sensor's slot past it: every wire leaves by the +y edge
 PEG_X, PEG_D, PEG_H = 55.0, 3.0, 2.0  # pegs on the walls locate the grid plate
 JIG_SLOT_SHIFT = 3.6              # the identification test's offset
-PIECE_BASE_D, PIECE_BASE_H = 28.0, 8.0
-PIECE_BODY_D, PIECE_BODY_H = 22.0, 14.0
-POCKET_D, POCKET_H = 10.3, 6.2    # three 10 x 2 magnets
+# Pieces are shogi-piece pentagons the size of a real fuhyo (27 long, 22.5 wide), tip towards
+# +y; the magnets sit at the centre of the outline's bounding box.
+PIECE_W, PIECE_SHOULDER_W = 22.5, 20.0  # width at the bottom edge, at the shoulders
+PIECE_SHOULDER, PIECE_L = 20.0, 27.0    # from the bottom edge to the shoulders, to the tip
+PIECE_RING = 2.0                  # the translucent base shows this far round the body (light ring)
+PIECE_BASE_H = 6.0
+PIECE_BODY_H = 3.3                # 0.8 of it in the base's recess: the piece stands 8.5 tall
+# The character engraved in the body's top, to be filled with paint: 歩 for the human's pieces,
+# と for the machine's (the back of a fuhyo). Noto Sans JP is under the SIL Open Font License;
+# a bold sans keeps every stroke wider than the printer's nozzle.
+PIECE_LABELS = {"fu": "歩", "to": "と"}
+LABEL_FONT = os.environ.get("LABEL_FONT", "C:/Windows/Fonts/NotoSansJP-VF.ttf")
+LABEL_WEIGHT = 700
+LABEL_H = 11.0                    # em size; the glyph itself is a little smaller
+LABEL_Y = -1.5                    # centre of the em square, below the outline's centre
+LABEL_DEPTH = 0.9                 # three 0.3 layers
+POCKET_D, POCKET_H = 10.3, 4.2    # two 10 x 2 magnets
 SPACER_D = 9.8
 ACRYLIC_L, ACRYLIC_W = GRID_L - 2.0, GRID_W - 2.0  # 118 x 43: inside the jig's skirt with room
 SEG = 96
@@ -135,39 +152,109 @@ def sled():
 
 
 def jig():
-    """Laid over the acrylic, its skirt round the grid plate: a slot one piece base wide and
-    3.6 longer over the prototype square. A piece pushed to the slot's -x end stands on the
+    """Laid over the acrylic, its skirt round the grid plate: a slot the size of a piece's
+    outline (either way round) and 3.6 longer in x over the prototype square. A piece pushed to the slot's -x end stands on the
     square's centre, pushed to the +x end 3.6 off it (the identification test). A notch in the
     skirt lets the sensor's and the LED's wires out of the grid plate's +y edge."""
     t, skirt, wall = 2.0, GRID_T + ACRYLIC_T, 1.2
     ix, iy = GRID_L / 2 + 0.4, GRID_W / 2 + 0.4
     part = box(-ix - wall, -iy - wall, 0, ix + wall, iy + wall, t)
     part += box(-ix - wall, -iy - wall, -skirt, ix + wall, iy + wall, 0) - box(-ix, -iy, -skirt - 1, ix, iy, 0.01)
-    r = PIECE_BASE_D / 2 + 0.4
-    slot = cyl(0, 0, -1, t + 1, 2 * r) + cyl(JIG_SLOT_SHIFT, 0, -1, t + 1, 2 * r) + box(0, -r, -1, JIG_SLOT_SHIFT, r, t + 1)
-    part -= slot
+    # The piece's bounding box with room, so it fits tip forwards (human) or backwards (machine).
+    rx, ry = PIECE_W / 2 + 0.4, PIECE_L / 2 + 0.4
+    part -= box(-rx, -ry, -1, JIG_SLOT_SHIFT + rx, ry, t + 1)
     x0, x1 = -SENSOR_SLOT_W / 2 - 1.5, LED_SLOT_X0 + LED_SLOT_W + 1.5  # wire exit
     part -= box(x0, iy - 3, -skirt - 1, x1, iy + 3, 0.0)
     return part
 
 
+def piece_outline(inset=0.0):
+    """The shogi-piece pentagon, centred on its bounding box, shrunk by inset all round."""
+    w, s, y0 = PIECE_W / 2, PIECE_SHOULDER_W / 2, -PIECE_L / 2
+    pts = [(-w, y0), (w, y0), (s, y0 + PIECE_SHOULDER), (0, y0 + PIECE_L), (-s, y0 + PIECE_SHOULDER)]
+    cs = mf.CrossSection([pts])
+    return cs.offset(-inset, mf.JoinType.Miter) if inset else cs
+
+
 def piece_base():
-    """Translucent base (light ring). Magnets go in from the bottom, flush with it."""
-    part = cyl(0, 0, 0, PIECE_BASE_H, PIECE_BASE_D)
+    """Translucent base (light ring). Magnets go in from the bottom, flush with it; the body
+    sits in a 0.8 recess on top."""
+    part = piece_outline().extrude(PIECE_BASE_H)
     part -= cyl(0, 0, -1, POCKET_H, POCKET_D)
-    part -= cyl(0, 0, PIECE_BASE_H - 0.8, PIECE_BASE_H + 1, PIECE_BODY_D + 0.4)
+    part -= piece_outline(PIECE_RING - 0.2).extrude(1.8).translate([0, 0, PIECE_BASE_H - 0.8])
     return part
 
 
-def piece_body():
-    """Opaque body (human: natural or white, machine: black), glued into the base's recess."""
-    part = cyl(0, 0, 0, PIECE_BODY_H - 1.0, PIECE_BODY_D)
-    part += mf.Manifold.cylinder(1.0, PIECE_BODY_D / 2, PIECE_BODY_D / 2 - 1.0, SEG).translate([0, 0, PIECE_BODY_H - 1.0])
-    return part
+class _FlatPen(BasePen):
+    """Glyph outline to polygons, curves cut into short straight pieces."""
+
+    def __init__(self, glyphset, steps=8):
+        super().__init__(glyphset)
+        self.contours, self.cur, self.steps = [], [], steps
+
+    def _moveTo(self, p):
+        self.cur = [p]
+
+    def _lineTo(self, p):
+        self.cur.append(p)
+
+    def _curveToOne(self, p1, p2, p3):
+        p0 = self.cur[-1]
+        for i in range(1, self.steps + 1):
+            t = i / self.steps
+            u = 1 - t
+            self.cur.append(tuple(u**3 * a + 3 * u * u * t * b + 3 * u * t * t * c + t**3 * d
+                                  for a, b, c, d in zip(p0, p1, p2, p3)))
+
+    def _qCurveToOne(self, p1, p2):
+        p0 = self.cur[-1]
+        for i in range(1, self.steps + 1):
+            t = i / self.steps
+            u = 1 - t
+            self.cur.append(tuple(u * u * a + 2 * u * t * b + t * t * c for a, b, c in zip(p0, p1, p2)))
+
+    def _closePath(self):
+        if len(self.cur) > 2:
+            self.contours.append(self.cur)
+        self.cur = []
+
+    _endPath = _closePath
+
+
+_font = None
+
+
+def label(ch):
+    """The character as a cross-section, LABEL_H em, centred across and at LABEL_Y."""
+    global _font
+    if _font is None:
+        if not os.path.exists(LABEL_FONT):
+            raise SystemExit(f"font not found: {LABEL_FONT} (install Noto Sans JP, or set LABEL_FONT)")
+        _font = instantiateVariableFont(TTFont(LABEL_FONT), {"wght": LABEL_WEIGHT})
+    glyphs = _font.getGlyphSet()
+    name = _font.getBestCmap()[ord(ch)]
+    pen = _FlatPen(glyphs)
+    glyphs[name].draw(pen)
+    k = LABEL_H / _font["head"].unitsPerEm
+    adv = glyphs[name].width
+    mid = (_font["OS/2"].sTypoAscender + _font["OS/2"].sTypoDescender) / 2  # em square's centre
+    contours = [[((x - adv / 2) * k, (y - mid) * k + LABEL_Y) for x, y in c] for c in pen.contours]
+    return mf.CrossSection(contours, mf.FillRule.NonZero)
+
+
+def piece_body(ch):
+    """Opaque body (human: natural or white, machine: black), set in the base's recess; the top
+    edge is chamfered 0.6 and the character is engraved LABEL_DEPTH into it."""
+    lower = piece_outline(PIECE_RING).extrude(PIECE_BODY_H - 0.6)
+    top = piece_outline(PIECE_RING + 0.6).extrude(0.01).translate([0, 0, PIECE_BODY_H - 0.01])
+    part = mf.Manifold.batch_hull([lower, top])
+    mark = label(ch)
+    assert (mark - piece_outline(PIECE_RING + 0.8)).is_empty(), f"{ch} runs into the chamfer"
+    return part - mark.extrude(LABEL_DEPTH + 1).translate([0, 0, PIECE_BODY_H - LABEL_DEPTH])
 
 
 def spacer():
-    """Fills the pocket above the magnets: one per magnet fewer than three."""
+    """Fills the pocket above a single magnet, so that it stays flush with the bottom."""
     return cyl(0, 0, 0, 2.0, SPACER_D)
 
 
@@ -176,7 +263,8 @@ PARTS = {
     "grid": grid,
     "sled": sled,
     "piece_base": piece_base,
-    "piece_body": piece_body,
+    "piece_body_fu": lambda: piece_body(PIECE_LABELS["fu"]),
+    "piece_body_to": lambda: piece_body(PIECE_LABELS["to"]),
     "spacer": spacer,
     "jig": jig,
 }
