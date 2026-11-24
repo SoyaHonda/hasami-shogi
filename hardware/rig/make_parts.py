@@ -56,8 +56,10 @@ PIECE_SHOULDER, PIECE_L = 20.0, 27.0    # from the bottom edge to the shoulders,
 PIECE_H = 7.75
 PIECE_SPLIT = 4.0                 # height of the lower half
 PIECE_FLOOR = 0.6                 # under the magnets: two 0.3 layers
-TONGUE_H, TONGUE_WALL = 1.0, 1.2  # the upper half's tongue drops into the lower half's recess
-PIECE_FIT = 0.1                   # clearance per side round the tongue: smaller is tighter
+TONGUE_H, TONGUE_WALL = 1.8, 1.2  # the upper half's tongue drops into the lower half's recess
+PIECE_FIT = 0.2                   # clearance per side round the tongue: its walls never touch
+RIB_BITE = 0.25                   # crush ribs on the tongue reach this far into the recess's wall
+RIB_W = 1.0                       # rib width at the tongue; the ribs are triangles, tip outwards
 SEAM_CHAMFER = 0.4                # V-groove at the seam, for prying the halves apart
 # The character engraved in the body's top, to be filled with paint: 歩 for the human's pieces,
 # と for the machine's (the back of a fuhyo). Noto Sans JP is under the SIL Open Font License;
@@ -193,8 +195,42 @@ def piece_base():
     """Translucent lower half. The magnets drop into the chamber from above, onto its floor; the
     upper half's tongue presses into the recess round the chamber's mouth."""
     part = chamfered(0, PIECE_SPLIT, SEAM_CHAMFER)
-    part -= piece_outline(TONGUE_WALL).extrude(TONGUE_H + 1).translate([0, 0, PIECE_SPLIT - TONGUE_H])
+    part -= piece_outline(TONGUE_WALL).extrude(TONGUE_H + 1.1).translate([0, 0, PIECE_SPLIT - TONGUE_H - 0.1])
     part -= cyl(0, 0, PIECE_FLOOR, PIECE_SPLIT + 1, POCKET_D)
+    return part
+
+
+def tongue():
+    """The upper half's tongue, clear of the recess by PIECE_FIT all round, with crush ribs that
+    bite RIB_BITE into the recess's wall: their tips squash as the halves are pressed together, so
+    the fit is tight whether the printer prints a little fat or thin. Two ribs on each long edge,
+    one on each slanted edge; each rib slopes in over its first 0.5 at the free end (lead-in)."""
+    inset = TONGUE_WALL + PIECE_FIT
+    z0 = PIECE_SPLIT - TONGUE_H
+    part = piece_outline(inset).extrude(TONGUE_H + 0.01).translate([0, 0, z0])
+    pts = piece_outline(inset).to_polygons()[0]
+    ribs = []
+    for (x1, y1), (x2, y2) in zip(pts, list(pts[1:]) + [pts[0]]):
+        dx, dy = x2 - x1, y2 - y1
+        n = np.hypot(dx, dy)
+        tx, ty = dx / n, dy / n
+        nx, ny = ty, -tx  # outward for a counter-clockwise outline
+        if (x1 + x2) * nx + (y1 + y2) * ny < 0:
+            nx, ny = -nx, -ny
+        for f in ((1 / 3, 2 / 3) if n > 12 else (0.5,)):
+            cx, cy = x1 + dx * f, y1 + dy * f
+            reach = PIECE_FIT + RIB_BITE
+
+            def tri(r):
+                h = RIB_W / 2
+                return mf.CrossSection([[(cx - tx * h - nx * 0.3, cy - ty * h - ny * 0.3),
+                                         (cx + tx * h - nx * 0.3, cy + ty * h - ny * 0.3),
+                                         (cx + nx * r, cy + ny * r)]], mf.FillRule.EvenOdd)
+            full = tri(reach).extrude(TONGUE_H - 0.5 + 0.2).translate([0, 0, z0 + 0.5])  # into the body
+            tip = tri(-0.05).extrude(0.01).translate([0, 0, z0 + 0.05])
+            ribs.append(mf.Manifold.batch_hull([full, tip]))
+    for r in ribs:
+        part += r
     return part
 
 
@@ -261,7 +297,7 @@ def piece_body(ch):
     chamber, the top edge chamfered 0.6 and the character engraved LABEL_DEPTH into the top.
     Printed upside down, the engraved face on the bed."""
     part = chamfered(PIECE_SPLIT, PIECE_H, 0.6)
-    part += piece_outline(TONGUE_WALL + PIECE_FIT).extrude(TONGUE_H + 0.01).translate([0, 0, PIECE_SPLIT - TONGUE_H])
+    part += tongue()
     part -= cyl(0, 0, PIECE_SPLIT - TONGUE_H - 1, PIECE_FLOOR + POCKET_H, POCKET_D)
     mark = label(ch)
     assert (mark - piece_outline(1.2)).is_empty(), f"{ch} runs into the chamfer"
