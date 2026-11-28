@@ -64,9 +64,10 @@ constexpr uint32_t HEAT_REPORT_MS = 5000;
 constexpr float GRAB_MAX_S = 30.0f;
 constexpr uint32_t GRAB_REPORT_MS = 1000;
 // `pole`: energized time before reading, and the field change that counts as a clear answer
-// (the electromagnet a few mm below the sensor gives tens of mT).
+// (the electromagnet's face a few mm below the sensor gives tens of mT: +32.1 mT through 3 mm of
+// card on 2026-11-28; with its back towards the sensor it gave only about -2 mT, the wrong sign).
 constexpr uint32_t POLE_MS = 300;
-constexpr float POLE_MIN_MT = 2.0f;
+constexpr float POLE_MIN_MT = 8.0f;
 // The prototype square's sensor: mux 0, channel 0 (select lines held low),
 // or the sensor wired straight to HALL_ADC[0].
 constexpr int PROTO_MUX = 0;
@@ -369,7 +370,9 @@ void cmdPole() {
   } else if (mt <= -POLE_MIN_MT) {
     Serial.println("  reversed: unplug the 12 V adapter, swap the electromagnet's wires on OUT1 and OUT2, run pole again");
   } else {
-    Serial.println("  no clear change: is the 12 V adapter plugged in and the sled under the prototype square?");
+    Serial.println(
+        "  no clear change: is the 12 V adapter plugged in, the electromagnet's face (not its back) towards the "
+        "sensor and the sled under the prototype square?");
   }
 }
 
